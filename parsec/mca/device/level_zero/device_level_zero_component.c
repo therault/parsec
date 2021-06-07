@@ -223,9 +223,6 @@ static int device_level_zero_component_register(void)
     (void)parsec_mca_param_reg_int_name("device_level_zero", "verbose",
                                         "Set the verbosity level of the LEVEL_ZERO device (negative value: use debug verbosity), higher is less verbose)\n",
                                         false, false, -1, &level_zero_verbosity);
-    (void)parsec_mca_param_reg_string_name("device_level_zero", "path",
-                                           "Path to the shared library files containing the LEVEL_ZERO version of the hooks. It is a ;-separated list of either directories or .so files.\n",
-                                           false, false, PARSEC_LIB_LEVEL_ZERO_PREFIX, &level_zero_lib_path);
     (void)parsec_mca_param_reg_int_name("device_level_zero", "memory_block_size",
                                         "The LEVEL_ZERO memory page for PaRSEC internal management (in bytes).",
                                         false, false, 512*1024, &level_zero_memory_block_size);

@@ -152,7 +152,7 @@ parsec_device_level_zero_detach( parsec_device_module_t* device,
 int parsec_level_zero_module_init( int dev_id, ze_driver_handle_t ze_driver, ze_device_handle_t ze_device,
                                    ze_device_properties_t *prop, parsec_device_module_t** module )
 {
-    int streaming_multiprocessor, drate, srate, trate, hrate, len;
+    int streaming_multiprocessor, len;
     parsec_device_level_zero_module_t* level_zero_device;
     parsec_device_gpu_module_t* gpu_device;
     parsec_device_module_t* device;
@@ -490,20 +490,60 @@ parsec_level_zero_module_fini(parsec_device_module_t* device)
  */
 static int
 parsec_level_zero_memory_reserve( parsec_device_level_zero_module_t* level_zero_device,
-                            int           memory_percentage,
-                            int           number_blocks,
-                            size_t        eltsize )
+                                  int           memory_percentage,
+                                  int           number_blocks,
+                                  size_t        eltsize )
 {
     ze_result_t status;
     parsec_device_gpu_module_t *gpu_device = &level_zero_device->super;
     (void)eltsize;
+    ze_device_properties_t devProperties;
+    ze_device_memory_properties_t *devMemProperties;
+    ze_device_memory_access_properties_t memAccessProperties;
+    uint32_t count = 0;
 
     size_t how_much_we_allocate;
-    size_t total_mem, initial_free_mem;
+    size_t initial_free_mem, alignment = 1 << 3;
+    int memIndex = -1;
     uint32_t mem_elem_per_gpu = 0;
 
-    /* Determine how much memory we can allocate */
-    level_zeroMemGetInfo( &initial_free_mem, &total_mem );
+    status = zeDeviceGetMemoryAccessProperties(level_zero_device->ze_device, &memAccessProperties);
+    PARSEC_LEVEL_ZERO_CHECK_ERROR("zeDeviceGetMemoryAccessProperties ", status, {
+        return PARSEC_ERROR;
+    });
+    if( 0 == (ZE_MEMORY_ACCESS_CAP_FLAG_RW & memAccessProperties.deviceAllocCapabilities) ) {
+        parsec_warning("%s:%d -- Device %s does not have memory allocation capabilities with RW access\n",
+                       __FILE__, __LINE__, gpu_device->super.name);
+        return PARSEC_ERROR;
+    }
+    status = zeDeviceGetProperties(level_zero_device->ze_device, &devProperties);
+    PARSEC_LEVEL_ZERO_CHECK_ERROR("zeDeviceGetProperties ", status, {
+       return PARSEC_ERROR;
+    });
+    status = zeDeviceGetMemoryProperties(level_zero_device->ze_device, &count, NULL);
+    PARSEC_LEVEL_ZERO_CHECK_ERROR("zeDeviceGetMemoryProperties ", status, {
+        return PARSEC_ERROR;
+    });
+    devMemProperties = (ze_device_memory_properties_t*)malloc(count * sizeof(ze_device_memory_properties_t));
+    status = zeDeviceGetMemoryProperties(level_zero_device->ze_device, &count, devMemProperties);
+    PARSEC_LEVEL_ZERO_CHECK_ERROR("zeDeviceGetMemoryProperties ", status, {
+        free(devMemProperties);
+        return PARSEC_ERROR;
+    });
+    for(int i = 0; i < (int)count; i++) {
+        // TODO: better approach would be to keep a list of pointers?
+        //   for now we just take the memory that has the highest amount of memory available
+        if( memIndex == -1 || devMemProperties[memIndex].totalSize < devMemProperties[i].totalSize)
+            memIndex = i;
+    }
+    initial_free_mem = devProperties.maxMemAllocSize < devMemProperties[memIndex].totalSize ?
+            devProperties.maxMemAllocSize : devMemProperties[memIndex].totalSize;
+    PARSEC_DEBUG_VERBOSE(10, parsec_level_zero_output_stream,
+                         "level-zero device %s: initial_free_mem is %lu (device max alloc size is %lu, device memory "
+                         "property total size for memory bank %d is %lu)", gpu_device->super.name, initial_free_mem,
+                        devProperties.maxMemAllocSize, memIndex, devMemProperties[memIndex].totalSize);
+    free(devMemProperties); devMemProperties = NULL;
+
     if( number_blocks != -1 ) {
         if( number_blocks == 0 ) {
             parsec_warning("LEVEL_ZERO[%d] Invalid argument: requesting 0 bytes of memory on LEVEL_ZERO device %s",
@@ -533,6 +573,12 @@ parsec_level_zero_memory_reserve( parsec_device_level_zero_module_t* level_zero_
                        level_zero_device->level_zero_index, gpu_device->super.name);
         return PARSEC_ERROR;
     }
+    ze_device_mem_alloc_desc_t memAllocDesc = {
+            .stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
+            .pNext = NULL,
+            .flags = ZE_DEVICE_MEM_ALLOC_FLAG_BIAS_UNCACHED,
+            .ordinal = memIndex
+    };
 
 #if defined(PARSEC_GPU_LEVEL_ZERO_ALLOC_PER_TILE)
     size_t free_mem = initial_free_mem;
@@ -545,15 +591,9 @@ parsec_level_zero_memory_reserve( parsec_device_level_zero_module_t* level_zero_
         parsec_gpu_data_copy_t* gpu_elem;
         void *device_ptr;
 
-        status = (ze_result_t)level_zeroMalloc( &device_ptr, eltsize);
-        PARSEC_LEVEL_ZERO_CHECK_ERROR( "(parsec_level_zero_memory_reserve) level_zeroMemAlloc ", status,
-                                ({
-                                    size_t _free_mem, _total_mem;
-                                    level_zeroMemGetInfo( &_free_mem, &_total_mem );
-                                    parsec_inform("GPU[%s] Per context: free mem %zu total mem %zu (allocated tiles %u)",
-                                                  gpu_device->super.name,_free_mem, _total_mem, mem_elem_per_gpu);
-                                    break;
-                                }) );
+        status = zeMemAllocDevice(level_zero_device->ze_context, &memAllocDesc, eltsize, alignment,
+                                  level_zero_device->ze_device, &device_ptr);
+        PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeMemAllocDevice ", status, { break; } );
         gpu_elem = PARSEC_OBJ_NEW(parsec_data_copy_t);
         PARSEC_DEBUG_VERBOSE(20, parsec_level_zero_output_stream,
                             "GPU[%s] Allocate LEVEL_ZERO copy %p [ref_count %d] for data [%p]",
@@ -567,7 +607,7 @@ parsec_level_zero_memory_reserve( parsec_device_level_zero_module_t* level_zero_
                             "GPU[%s] Retain and insert LEVEL_ZERO copy %p [ref_count %d] in LRU",
                              gpu_device->super.name, gpu_elem, gpu_elem->super.obj_reference_count);
         parsec_list_push_back( &gpu_device->gpu_mem_lru, (parsec_list_item_t*)gpu_elem );
-        level_zeroMemGetInfo( &free_mem, &total_mem );
+        free_mem -= alignment * ((size + alignment - 1) / alignment);
     }
     if( 0 == mem_elem_per_gpu && parsec_list_is_empty( &gpu_device->gpu_mem_lru ) ) {
         parsec_warning("GPU[%s] Cannot allocate memory on GPU %s. Skip it!", gpu_device->super.name, gpu_device->super.name);
@@ -594,8 +634,9 @@ parsec_level_zero_memory_reserve( parsec_device_level_zero_module_t* level_zero_
             total_size = (size_t)((int)(.9*initial_free_mem / eltsize)) * eltsize;
             mem_elem_per_gpu = total_size / eltsize;
         }
-        status = (ze_result_t)level_zeroMalloc(&base_ptr, total_size);
-        PARSEC_LEVEL_ZERO_CHECK_ERROR( "(parsec_level_zero_memory_reserve) level_zeroMalloc ", status,
+        status = zeMemAllocDevice(level_zero_device->ze_context, &memAllocDesc, total_size, alignment,
+                                  level_zero_device->ze_device, &base_ptr);
+        PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeMemAllocDevice ", status,
                                  ({ parsec_warning("GPU[%s] Allocating %zu bytes of memory on the GPU device failed",
                                                    gpu_device->super.name, total_size); }) );
 
@@ -707,17 +748,13 @@ parsec_level_zero_memory_release( parsec_device_level_zero_module_t* level_zero_
 {
     ze_result_t status;
 
-    status = level_zeroSetDevice( level_zero_device->level_zero_index );
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "(parsec_level_zero_memory_release) level_zeroSetDevice ", status,
-                            {continue;} );
-
     parsec_level_zero_flush_lru(&level_zero_device->super.super);
 
 #if !defined(PARSEC_GPU_LEVEL_ZERO_ALLOC_PER_TILE)
     assert( NULL != level_zero_device->super.memory );
     void* ptr = zone_malloc_fini(&level_zero_device->super.memory);
-    status = level_zeroFree(ptr);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "(parsec_level_zero_memory_release) level_zeroFree ", status,
+    status = zeMemFree(level_zero_device->ze_context, ptr);
+    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeMemFree ", status,
                              { parsec_warning("Failed to free the GPU backend memory."); } );
 #endif
 
@@ -1050,14 +1087,13 @@ parsec_gpu_data_reserve_device_space( parsec_device_level_zero_module_t* level_z
  *
  */
 int
-parsec_default_gpu_stage_in(parsec_gpu_task_t        *gtask,
-                            uint32_t                  flow_mask,
-                            parsec_gpu_exec_stream_t *gpu_stream)
+parsec_level_zero_stage_in(parsec_gpu_task_t        *gtask,
+                           uint32_t                  flow_mask,
+                           parsec_gpu_exec_stream_t *gpu_stream)
 {
     ze_result_t ret;
     parsec_data_copy_t * copy_in;
     parsec_data_copy_t * copy_out;
-    parsec_device_module_t *in_elem_dev;
     parsec_task_t *task = gtask->ec;
     size_t count;
     parsec_level_zero_exec_stream_t *level_zero_stream = (parsec_level_zero_exec_stream_t *)gpu_stream;
@@ -1066,16 +1102,15 @@ parsec_default_gpu_stage_in(parsec_gpu_task_t        *gtask,
         if(flow_mask & (1U << i)){
             copy_in = task->data[i].data_in;
             copy_out = task->data[i].data_out;
-            in_elem_dev = parsec_mca_device_get( copy_in->device_index);
             count = (copy_in->original->nb_elts <= copy_out->original->nb_elts) ?
                           copy_in->original->nb_elts : copy_out->original->nb_elts;
-            ret = (ze_result_t)level_zeroMemcpyAsync( copy_out->device_private,
-                                                copy_in->device_private,
-                                                count,
-                                                in_elem_dev->type != PARSEC_DEV_LEVEL_ZERO ?
-                                                       level_zeroMemcpyHostToDevice : level_zeroMemcpyDeviceToDevice,
-                                                level_zero_stream->level_zero_cl );
-            PARSEC_LEVEL_ZERO_CHECK_ERROR( "level_zeroMemcpyAsync ", ret, { return PARSEC_ERROR; } );
+            ret = (ze_result_t)zeCommandListAppendMemoryCopy(level_zero_stream->level_zero_cl,
+                                                             copy_out->device_private,
+                                                             copy_in->device_private,
+                                                             count,
+                                                             NULL,
+                                                             0, NULL);
+            PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListAppendMemoryCopy ", ret, { return PARSEC_ERROR; } );
         }
     }
     return PARSEC_SUCCESS;
@@ -1091,14 +1126,13 @@ parsec_default_gpu_stage_in(parsec_gpu_task_t        *gtask,
  *
  */
 int
-parsec_default_gpu_stage_out(parsec_gpu_task_t        *gtask,
-                             uint32_t                  flow_mask,
-                             parsec_gpu_exec_stream_t *gpu_stream)
+parsec_level_zero_stage_out(parsec_gpu_task_t        *gtask,
+                            uint32_t                  flow_mask,
+                            parsec_gpu_exec_stream_t *gpu_stream)
 {
     ze_result_t ret;
     parsec_data_copy_t * copy_in;
     parsec_data_copy_t * copy_out;
-    parsec_device_level_zero_module_t *out_elem_dev;
     parsec_task_t *task = gtask->ec;
     size_t count;
     parsec_level_zero_exec_stream_t *level_zero_stream = (parsec_level_zero_exec_stream_t*)gpu_stream;
@@ -1107,16 +1141,15 @@ parsec_default_gpu_stage_out(parsec_gpu_task_t        *gtask,
         if(flow_mask & (1U << i)){
             copy_in = task->data[i].data_out;
             copy_out = copy_in->original->device_copies[0];
-            out_elem_dev = (parsec_device_level_zero_module_t*)parsec_mca_device_get( copy_out->device_index);
             count = (copy_in->original->nb_elts <= copy_out->original->nb_elts) ? copy_in->original->nb_elts :
                         copy_out->original->nb_elts;
-            ret = (ze_result_t)level_zeroMemcpyAsync( copy_out->device_private,
-                                                copy_in->device_private,
-                                                count,
-                                                out_elem_dev->super.super.type != PARSEC_DEV_LEVEL_ZERO ?
-                                                    level_zeroMemcpyDeviceToHost : level_zeroMemcpyDeviceToDevice,
-                                                level_zero_stream->level_zero_cl );
-            PARSEC_LEVEL_ZERO_CHECK_ERROR( "level_zeroMemcpyAsync ", ret, { return PARSEC_ERROR; } );
+            ret = (ze_result_t)zeCommandListAppendMemoryCopy(level_zero_stream->level_zero_cl,
+                                                             copy_out->device_private,
+                                                             copy_in->device_private,
+                                                             count,
+                                                             NULL,
+                                                             0, NULL);
+            PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListAppendMemoryCopy ", ret, { return PARSEC_ERROR; } );
         }
     }
     return PARSEC_SUCCESS;
@@ -1503,14 +1536,6 @@ parsec_gpu_check_space_needed(parsec_device_gpu_module_t *gpu_device,
     return space_needed;
 }
 
-void dump_list(parsec_list_t *list)
-{
-    parsec_list_item_t *p = (parsec_list_item_t *)list->ghost_element.list_next;
-    while (p != &(list->ghost_element)) {
-        p = (parsec_list_item_t *)p->list_next;
-    }
-}
-
 
 int parsec_gpu_sort_pending_list(parsec_device_gpu_module_t *gpu_device)
 {
@@ -1823,8 +1848,8 @@ parsec_level_zero_data_advise(parsec_device_module_t *dev, parsec_data_t *data, 
             gpu_task->ec->task_class = &parsec_level_zero_data_prefetch_tc;
             gpu_task->flow[0] = &parsec_level_zero_data_prefetch_flow;
             gpu_task->flow_nb_elts[0] = data->device_copies[ data->owner_device ]->original->nb_elts;
-            gpu_task->stage_in  = parsec_default_gpu_stage_in;
-            gpu_task->stage_out = parsec_default_gpu_stage_out;
+            gpu_task->stage_in  = parsec_level_zero_stage_in;
+            gpu_task->stage_out = parsec_level_zero_stage_out;
             PARSEC_DEBUG_VERBOSE(20, parsec_debug_output, "Retain data copy %p [ref_count %d] at %s:%d",
                                  data->device_copies[ data->owner_device ],
                                  data->device_copies[ data->owner_device ]->super.super.obj_reference_count,
@@ -1917,8 +1942,8 @@ parsec_gpu_send_transfercomplete_cmd_to_device(parsec_data_copy_t *copy,
     gpu_task->ec->task_class = &parsec_level_zero_d2d_complete_tc;
     gpu_task->flow[0] = &parsec_level_zero_d2d_complete_flow;
     gpu_task->flow_nb_elts[0] = copy->original->nb_elts;
-    gpu_task->stage_in  = parsec_default_gpu_stage_in;
-    gpu_task->stage_out = parsec_default_gpu_stage_out;
+    gpu_task->stage_in  = parsec_level_zero_stage_in;
+    gpu_task->stage_out = parsec_level_zero_stage_out;
     gpu_task->ec->data[0].data_in = copy;  /* We need to set not-null in data_in, so that the fake flow is
                                             * not ignored when poping the data from the fake task */ 
     gpu_task->ec->data[0].data_out = copy; /* We "free" data[i].data_out if its readers reaches 0 */
@@ -2156,8 +2181,8 @@ progress_stream( parsec_device_gpu_module_t* gpu_device,
     progress_fct = upstream_progress_fct;
 
     if( NULL != stream->tasks[stream->end] ) {
-        rc = level_zeroEventQuery(level_zero_stream->events[stream->end]);
-        if( level_zeroSuccess == rc ) {
+        rc = zeEventQueryStatus(level_zero_stream->events[stream->end]);
+        if( ZE_RESULT_SUCCESS == rc ) {
             /* Save the task for the next step */
             task = *out_task = stream->tasks[stream->end];
             PARSEC_DEBUG_VERBOSE(19, parsec_level_zero_output_stream,
@@ -2182,8 +2207,8 @@ progress_stream( parsec_device_gpu_module_t* gpu_device,
             /* the task can be withdrawn by the system */
             return rc;
         }
-        if( level_zeroErrorNotReady != rc ) {
-            PARSEC_LEVEL_ZERO_CHECK_ERROR( "(progress_stream) level_zeroEventQuery ", rc,
+        if( ZE_RESULT_NOT_READY != rc ) {
+            PARSEC_LEVEL_ZERO_CHECK_ERROR( "(progress_stream) zeEventQueryStatus ", rc,
                                      {return PARSEC_HOOK_RETURN_AGAIN;} );
         }
     }
@@ -2246,8 +2271,8 @@ progress_stream( parsec_device_gpu_module_t* gpu_device,
      * too early, it might get executed before the data is available on the GPU.
      * Obviously, this lead to incorrect results.
      */
-    rc = level_zeroEventRecord( level_zero_stream->events[stream->start], level_zero_stream->level_zero_cl );
-    assert(level_zeroSuccess == rc);
+    rc = zeCommandListAppendSignalEvent( level_zero_stream->level_zero_cl, level_zero_stream->events[stream->start] );
+    assert(ZE_RESULT_SUCCESS == rc);
     stream->tasks[stream->start]    = task;
     stream->start = (stream->start + 1) % stream->max_events;
     PARSEC_DEBUG_VERBOSE(20, parsec_level_zero_output_stream,
@@ -2775,7 +2800,6 @@ parsec_gpu_kernel_scheduler( parsec_execution_stream_t *es,
 {
     parsec_device_gpu_module_t* gpu_device;
     parsec_device_level_zero_module_t *level_zero_device;
-    ze_result_t status;
     int rc, exec_stream = 0;
     parsec_gpu_task_t *progress_task, *out_task_submit = NULL, *out_task_pop = NULL;
 #if defined(PARSEC_DEBUG_NOISIER)
@@ -2830,10 +2854,6 @@ parsec_gpu_kernel_scheduler( parsec_execution_stream_t *es,
         PARSEC_PROFILING_TRACE( es->es_profile, parsec_level_zero_own_GPU_key_start,
                                 (unsigned long)es, PROFILE_OBJECT_ID_NULL, NULL );
 #endif  /* defined(PARSEC_PROF_TRACE) */
-
-    status = level_zeroSetDevice( level_zero_device->level_zero_index );
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "(parsec_gpu_kernel_scheduler) level_zeroSetDevice ", status,
-                             {return PARSEC_HOOK_RETURN_DISABLE;} );
 
  check_in_deps:
     if( NULL != gpu_task ) {
