@@ -33,36 +33,12 @@ static int device_level_zero_component_query(mca_base_module_2_0_0_t **module, i
 static int device_level_zero_component_register(void);
 
 int use_level_zero_index, use_level_zero;
-int level_zero_mask, level_zero_verbosity, level_zero_nvlink_mask;
+int level_zero_mask, level_zero_nvlink_mask;
 int level_zero_memory_block_size, level_zero_memory_percentage, level_zero_memory_number_of_blocks;
-int parsec_level_zero_output_stream = -1;
 
 int32_t parsec_LEVEL_ZERO_sort_pending_list = 0;
 
 char* level_zero_lib_path = NULL;
-
-#if defined(PARSEC_PROF_TRACE)
-/* Accepted values are: PARSEC_PROFILE_LEVEL_ZERO_TRACK_DATA_IN | PARSEC_PROFILE_LEVEL_ZERO_TRACK_DATA_OUT |
- *                      PARSEC_PROFILE_LEVEL_ZERO_TRACK_OWN | PARSEC_PROFILE_LEVEL_ZERO_TRACK_EXEC |
- *                      PARSEC_PROFILE_LEVEL_ZERO_TRACK_MEM_USE | PARSEC_PROFILE_LEVEL_ZERO_TRACK_PREFETCH
- */
-int parsec_level_zero_trackable_events = PARSEC_PROFILE_LEVEL_ZERO_TRACK_EXEC | PARSEC_PROFILE_LEVEL_ZERO_TRACK_DATA_OUT
-    | PARSEC_PROFILE_LEVEL_ZERO_TRACK_DATA_IN | PARSEC_PROFILE_LEVEL_ZERO_TRACK_OWN | PARSEC_PROFILE_LEVEL_ZERO_TRACK_MEM_USE
-    | PARSEC_PROFILE_LEVEL_ZERO_TRACK_PREFETCH;
-int parsec_level_zero_movein_key_start;
-int parsec_level_zero_movein_key_end;
-int parsec_level_zero_moveout_key_start;
-int parsec_level_zero_moveout_key_end;
-int parsec_level_zero_own_GPU_key_start;
-int parsec_level_zero_own_GPU_key_end;
-int parsec_level_zero_allocate_memory_key;
-int parsec_level_zero_free_memory_key;
-int parsec_level_zero_use_memory_key_start;
-int parsec_level_zero_use_memory_key_end;
-int parsec_level_zero_prefetch_key_start;
-int parsec_level_zero_prefetch_key_end;
-int parsec_device_level_zero_one_profiling_stream_per_level_zero_stream = 0;
-#endif  /* defined(PROFILING) */
 
 /*
  * Instantiate the public struct with all of our public information
@@ -117,26 +93,7 @@ static int device_level_zero_component_query(mca_base_module_t **module, int *pr
     if( 0 == use_level_zero ) {
         return MCA_SUCCESS;
     }
-#if defined(PARSEC_PROF_TRACE)
-    parsec_profiling_add_dictionary_keyword( "level_zero", "fill:#66ff66",
-                                             0, NULL,
-                                             &parsec_level_zero_own_GPU_key_start, &parsec_level_zero_own_GPU_key_end);
-    parsec_profiling_add_dictionary_keyword( "movein", "fill:#33FF33",
-                                             sizeof(parsec_profile_data_collection_info_t), PARSEC_PROFILE_DATA_COLLECTION_INFO_CONVERTOR,
-                                             &parsec_level_zero_movein_key_start, &parsec_level_zero_movein_key_end);
-    parsec_profiling_add_dictionary_keyword( "moveout", "fill:#ffff66",
-                                             sizeof(parsec_profile_data_collection_info_t), PARSEC_PROFILE_DATA_COLLECTION_INFO_CONVERTOR,
-                                             &parsec_level_zero_moveout_key_start, &parsec_level_zero_moveout_key_end);
-    parsec_profiling_add_dictionary_keyword( "prefetch", "fill:#66ff66",
-                                             sizeof(parsec_profile_data_collection_info_t), PARSEC_PROFILE_DATA_COLLECTION_INFO_CONVERTOR,
-                                             &parsec_level_zero_prefetch_key_start, &parsec_level_zero_prefetch_key_end);
-    parsec_profiling_add_dictionary_keyword( "level_zero_mem_alloc", "fill:#FF66FF",
-                                             sizeof(int64_t), "size{int64_t}",
-                                             &parsec_level_zero_allocate_memory_key, &parsec_level_zero_free_memory_key);
-    parsec_profiling_add_dictionary_keyword( "level_zero_mem_use", "fill:#FF66FF",
-                                             sizeof(parsec_device_level_zero_memory_prof_info_t), PARSEC_DEVICE_LEVEL_ZERO_MEMORY_PROF_INFO_CONVERTER,
-                                             &parsec_level_zero_use_memory_key_start, &parsec_level_zero_use_memory_key_end);
-#endif  /* defined(PROFILING) */
+    parsec_gpu_init_profiling();
 
     if( use_level_zero >= 1) {
         uint32_t driverCount = 0;
@@ -195,11 +152,7 @@ static int device_level_zero_component_query(mca_base_module_t **module, int *pr
     if(NULL != allDrivers)
         free(allDrivers);
 
-    parsec_level_zero_output_stream = parsec_device_output;
-    if( level_zero_verbosity >= 0 ) {
-        parsec_level_zero_output_stream = parsec_output_open(NULL);
-        parsec_output_set_verbosity(parsec_level_zero_output_stream, level_zero_verbosity);
-    }
+    parsec_gpu_enable_debug();
 
     /* module type should be: const mca_base_module_t ** */
     void *ptr = parsec_device_level_zero_component.modules;
@@ -222,7 +175,7 @@ static int device_level_zero_component_register(void)
                                         false, false, 0xffffffff, &level_zero_nvlink_mask);
     (void)parsec_mca_param_reg_int_name("device_level_zero", "verbose",
                                         "Set the verbosity level of the LEVEL_ZERO device (negative value: use debug verbosity), higher is less verbose)\n",
-                                        false, false, -1, &level_zero_verbosity);
+                                        false, false, -1, &parsec_gpu_verbosity);
     (void)parsec_mca_param_reg_int_name("device_level_zero", "memory_block_size",
                                         "The LEVEL_ZERO memory page for PaRSEC internal management (in bytes).",
                                         false, false, 512*1024, &level_zero_memory_block_size);
@@ -234,14 +187,14 @@ static int device_level_zero_component_register(void)
                                         false, false, -1, &level_zero_memory_number_of_blocks);
     (void)parsec_mca_param_reg_int_name("device_level_zero", "max_number_of_ejected_data",
                                         "Sets up the maximum number of blocks that can be ejected from GPU memory",
-                                        false, false, MAX_PARAM_COUNT, &parsec_LEVEL_ZERO_d2h_max_flows);
+                                        false, false, MAX_PARAM_COUNT, &parsec_GPU_d2h_max_flows);
     (void)parsec_mca_param_reg_int_name("device_level_zero", "sort_pending_tasks",
                                         "Boolean to let the GPU engine sort the first pending tasks stored in the list",
                                         false, false, 0, &parsec_LEVEL_ZERO_sort_pending_list);
 #if defined(PARSEC_PROF_TRACE)
     (void)parsec_mca_param_reg_int_name("device_level_zero", "one_profiling_stream_per_level_zero_stream",
                                         "Boolean to separate the profiling of each level_zero stream into a single profiling stream",
-                                        false, false, 0, &parsec_device_level_zero_one_profiling_stream_per_level_zero_stream);
+                                        false, false, 0, &parsec_device_gpu_one_profiling_stream_per_gpu_stream);
 #endif
 
     /* If LEVEL_ZERO was not requested avoid initializing the devices */
@@ -347,7 +300,7 @@ static int device_level_zero_component_close(void)
 
         rc = parsec_level_zero_module_fini((parsec_device_module_t*)cdev);
         if( PARSEC_SUCCESS != rc ) {
-            PARSEC_DEBUG_VERBOSE(0, parsec_level_zero_output_stream,
+            PARSEC_DEBUG_VERBOSE(0, parsec_gpu_output_stream,
                                  "GPU[%d] Failed to release resources on LEVEL_ZERO device\n", 
                                  cdev->level_zero_index);
         }
@@ -355,7 +308,7 @@ static int device_level_zero_component_close(void)
         /* unregister the device from PaRSEC */
         rc = parsec_mca_device_remove((parsec_device_module_t*)cdev);
         if( PARSEC_SUCCESS != rc ) {
-            PARSEC_DEBUG_VERBOSE(0, parsec_level_zero_output_stream,
+            PARSEC_DEBUG_VERBOSE(0, parsec_gpu_output_stream,
                                  "GPU[%d] Failed to unregister LEVEL_ZERO device %d\n", 
                                  cdev->level_zero_index, cdev->level_zero_index);
         }
@@ -369,16 +322,16 @@ static int device_level_zero_component_close(void)
         if( NULL == (cdev = (parsec_device_level_zero_module_t*)parsec_mca_device_get(i)) ) continue;
         if(PARSEC_DEV_LEVEL_ZERO != cdev->super.super.type) continue;
 
-        PARSEC_DEBUG_VERBOSE(0, parsec_level_zero_output_stream,
+        PARSEC_DEBUG_VERBOSE(0, parsec_gpu_output_stream,
                              "GPU[%d] LEVEL_ZERO device still registered with PaRSEC at the end of LEVEL_ZERO finalize.\n"
                              " Please contact the developers or fill an issue.\n", 
                              cdev->level_zero_index);
     }
 #endif  /* defined(PARSEC_DEBUG_NOISIER) */
 
-    if( parsec_device_output != parsec_level_zero_output_stream )
-        parsec_output_close(parsec_level_zero_output_stream);
-    parsec_level_zero_output_stream = parsec_device_output;
+    if( parsec_device_output != parsec_gpu_output_stream )
+        parsec_output_close(parsec_gpu_output_stream);
+    parsec_gpu_output_stream = parsec_device_output;
 
     if ( level_zero_lib_path ) {
         free(level_zero_lib_path);

@@ -45,7 +45,6 @@ struct parsec_device_level_zero_module_s {
     ze_driver_handle_t               ze_driver;
     ze_device_handle_t               ze_device;
     ze_context_handle_t              ze_context;
-    parsec_level_zero_exec_stream_t *exec_stream;
 };
 
 PARSEC_OBJ_CLASS_DECLARATION(parsec_device_level_zero_module_t);
