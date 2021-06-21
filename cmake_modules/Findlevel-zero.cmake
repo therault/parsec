@@ -8,7 +8,7 @@ if(PKG_CONFIG_FOUND)
         add_library(level_zero::ze_loader UNKNOWN IMPORTED GLOBAL)
         set_property(TARGET level_zero::ze_loader PROPERTY IMPORTED_LOCATION "${LEVEL_ZERO_LIBRARY_DIR}/libze_loader.so")
         set_property(TARGET level_zero::ze_loader PROPERTY INTERFACE "${LEVEL_ZERO_INCLUDE_DIR}/level-zero/ze_api.h")
-        include_directories("${LEVEL_ZERO_INCLUDE_DIR}/level-zero/")
+        include_directories("${LEVEL_ZERO_INCLUDE_DIR}/")
     endif(LEVEL_ZERO_FOUND)
 else(PKG_CONFIG_FOUND)
 

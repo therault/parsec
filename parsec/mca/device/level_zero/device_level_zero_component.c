@@ -23,7 +23,7 @@
 #include "parsec/utils/zone_malloc.h"
 #include "parsec/class/fifo.h"
 
-#include <ze_api.h>
+#include <level_zero/ze_api.h>
 
 PARSEC_OBJ_CLASS_INSTANCE(parsec_device_level_zero_module_t, parsec_device_module_t, NULL, NULL);
 
