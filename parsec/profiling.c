@@ -39,19 +39,11 @@
 #define min(a, b) ((a)<(b)?(a):(b))
 
 #ifndef HOST_NAME_MAX
-#if defined(PARSEC_OSX)
+#if defined(__APPLE__)
 #define HOST_NAME_MAX _SC_HOST_NAME_MAX
 #else
 #define HOST_NAME_MAX 1024
-#endif  /* defined(PARSEC_OSX) */
-#endif /* defined(HOST_NAME_MAX) */
-
-#ifndef HOST_NAME_MAX
-#if defined(PARSEC_OSX)
-#define HOST_NAME_MAX _SC_HOST_NAME_MAX
-#else
-#define HOST_NAME_MAX 1024
-#endif  /* defined(PARSEC_OSX) */
+#endif  /* defined(__APPLE__) */
 #endif /* defined(HOST_NAME_MAX) */
 
 int parsec_profile_enabled = 0;

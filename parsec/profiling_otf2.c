@@ -17,6 +17,7 @@
 
 #include <sys/stat.h>
 #include <otf2/otf2.h>
+#include <otf2/OTF2_GeneralDefinitions.h>
 #if MPI_VERSION < 3
 #define OTF2_MPI_UINT64_T MPI_UNSIGNED_LONG
 #define OTF2_MPI_INT64_T  MPI_LONG
@@ -29,6 +30,14 @@
 static MPI_Comm parsec_otf2_profiling_comm;
 static int parsec_profiling_mpi_on = 0;
 static int process_id = 0;
+
+#ifndef HOST_NAME_MAX
+#if defined(__APPLE__)
+#define HOST_NAME_MAX _SC_HOST_NAME_MAX
+#else
+#define HOST_NAME_MAX 1024
+#endif  /* defined(__APPLE__) */
+#endif /* defined(HOST_NAME_MAX) */
 
 /* where to start region IDs */
 #define REGION_ID_OFFSET 2
@@ -934,7 +943,11 @@ int parsec_profiling_dbp_dump( void )
 
         rc = OTF2_GlobalDefWriter_WriteClockProperties( global_def_writer,
                                                         1000000000,
-                                                        0, gepoch + 1);
+                                                        0, gepoch + 1
+#if OTF2_VERSION_MAJOR >= 3
+                                                        , OTF2_UNDEFINED_TIMESTAMP
+#endif
+                                                       );
         if(rc != OTF2_SUCCESS) {
             parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
         }
@@ -1013,7 +1026,11 @@ int parsec_profiling_dbp_dump( void )
                                                           r,
                                                           strid,
                                                           OTF2_LOCATION_GROUP_TYPE_PROCESS,
-                                                          0 /* system tree */ );
+                                                          0 /* system tree */
+#if OTF2_VERSION_MAJOR >= 3
+                                                         , OTF2_UNDEFINED_LOCATION_GROUP /* creating process */
+#endif
+                                                         );
 
             for (uint64_t i = 0; i < perlocation[r]; ++i) {
 
@@ -1108,7 +1125,11 @@ int parsec_profiling_dbp_dump( void )
                                              0 /* Communicator id */,
                                              strid /* name */,
                                              1 /* group */,
-                                             OTF2_UNDEFINED_COMM /* parent */ );
+                                             OTF2_UNDEFINED_COMM /* parent */
+#if OTF2_VERSION_MAJOR >= 3
+                                            , OTF2_COMM_FLAG_CREATE_DESTROY_EVENTS /* flags */
+#endif
+                                            );
         if(rc != OTF2_SUCCESS) {
             parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
         }
