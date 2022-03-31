@@ -409,6 +409,7 @@ struct parsec_task_class_s {
     parsec_functionkey_fn_t     *key_generator;
     parsec_key_fn_t             *key_functions;
     parsec_key_t               (*make_key)(const parsec_taskpool_t *, const parsec_assignment_t *);
+    char *                     (*task_snprintf)(char *buffer, size_t buffer_size, const parsec_task_t *task);
 #if defined(PARSEC_SIM)
     parsec_sim_cost_fct_t       *sim_cost_fct;
 #endif
