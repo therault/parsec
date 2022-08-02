@@ -554,7 +554,7 @@ static int parsec_termdet_fourcounter_incoming_message_start(parsec_taskpool_t *
     assert( tp->tdm.monitor != PARSEC_TERMDET_FOURCOUNTER_TERMINATED );
 
     tpm = tp->tdm.monitor;
-    assert( tpm->state > PARSEC_TERMDET_FOURCOUNTER_NOT_READY);
+    //assert( tpm->state > PARSEC_TERMDET_FOURCOUNTER_NOT_READY);
 
     parsec_atomic_rwlock_wrlock(&tpm->rw_lock);
     /* If we were ready or more, we become busy */
@@ -592,7 +592,7 @@ static int parsec_termdet_fourcounter_incoming_message_end(parsec_taskpool_t *tp
     tpm = tp->tdm.monitor;
 
     parsec_atomic_rwlock_wrlock(&tpm->rw_lock);
-    assert( tpm->state > PARSEC_TERMDET_FOURCOUNTER_NOT_READY);
+    //assert( tpm->state > PARSEC_TERMDET_FOURCOUNTER_NOT_READY);
     tpm->messages_received++;
     parsec_atomic_rwlock_wrunlock(&tpm->rw_lock);
 
