@@ -684,6 +684,28 @@ parsec_dtd_add_profiling_info_generic( parsec_taskpool_t *tp,
     free(str);
 }
 
+void *parsec_dtd_task_profile_info(void *dst, const void *task_, size_t size)
+{
+    void *ptr;
+    parsec_dtd_task_t *task = (parsec_dtd_task_t *)task_;
+    parsec_dtd_task_param_t *param = GET_HEAD_OF_PARAM_LIST(task);
+
+    assert( task->super.task_class->task_class_type == PARSEC_TASK_CLASS_TYPE_DTD );
+    
+    memcpy(dst, &task->super.prof_info, sizeof(parsec_task_prof_info_t));
+    ptr = dst + sizeof(parsec_task_prof_info_t);
+
+    while( param != NULL) {
+        if(param->op_type & PARSEC_PROFILE_INFO) {
+            assert( ptr-dst < (intptr_t)size ); (void)size;
+            memcpy(ptr, param->pointer_to_tile, param->arg_size);
+            ptr += param->arg_size;
+        } 
+        param = param->next;
+    }
+
+    return dst;
+}
 #endif /* defined(PARSEC_PROF_TRACE) */
 
 /* **************************************************************************** */
@@ -2232,9 +2254,9 @@ parsec_dtd_create_and_initialize_task( parsec_dtd_taskpool_t *dtd_tp,
 
     assert(this_task->super.super.super.obj_reference_count == 1);
 
-    this_task->orig_task        = NULL;
-    this_task->super.taskpool   = (parsec_taskpool_t*)dtd_tp;
-    this_task->ht_item.key      = (parsec_key_t)(uintptr_t)(dtd_tp->task_id++);
+    this_task->orig_task = NULL;
+    this_task->super.taskpool = (parsec_taskpool_t *)dtd_tp;
+    this_task->ht_item.key = (parsec_key_t)(uintptr_t)(dtd_tp->task_id++);
     /* this is needed for grapher to work properly */
     this_task->super.locals[0].value = (int)(uintptr_t)this_task->ht_item.key;
     assert( (uintptr_t)this_task->super.locals[0].value == (uintptr_t)this_task->ht_item.key );
@@ -2736,6 +2758,18 @@ parsec_dtd_iterator_arg_get_rank(int first_arg, void *tile,
                 }
             }
         }
+        params[nb_params].op = tile_op_type;
+        params[nb_params].profile_info = NULL;
+        if(NULL != dtd_tc) {
+            if(dtd_tc->count_of_params <= nb_params) {
+                parsec_fatal("Task class of '%s' is only defined to use %d parameters, yet it is called with more.\n"
+                             "Error in task insertion.\n", tc->name, dtd_tc->count_of_params);
+            }
+            params[nb_params].op |= dtd_tc->params[nb_params].op;
+            params[nb_params].profile_info = dtd_tc->params[nb_params].profile_info;
+        }
+        params[nb_params].size = arg_size;
+        nb_params++;
     }
     return 1;
 }
