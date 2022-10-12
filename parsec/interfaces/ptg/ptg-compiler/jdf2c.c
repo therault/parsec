@@ -1570,7 +1570,7 @@ static void jdf_dump_internal_structure(string_arena_t *sa, jdf_t *jdf)
     sa1 = string_arena_new(64);
     sa2 = string_arena_new(64);
 
-    coutput("#include \"%s.h\"\n\n"
+    string_arena_add_string(sa, "#include \"%s.h\"\n\n"
             "struct __parsec_%s_internal_taskpool_s {\n"
             " parsec_%s_taskpool_t super;\n"
             " volatile int32_t sync_point;\n"
@@ -1578,7 +1578,7 @@ static void jdf_dump_internal_structure(string_arena_t *sa, jdf_t *jdf)
             " parsec_task_t* startup_queue;\n",
             jdf_basename, jdf_basename, jdf_basename);
 
-    coutput("  /* The ranges to compute the hash key */\n");
+    string_arena_add_string(sa, "  /* The ranges to compute the hash key */\n");
     for(f = jdf->functions; f != NULL; f = f->next) {
         if( 0 == (f->user_defines & JDF_FUNCTION_HAS_UD_MAKE_KEY) ) {
             for(pl = f->parameters; pl != NULL; pl = pl->next) {
