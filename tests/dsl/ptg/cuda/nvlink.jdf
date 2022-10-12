@@ -38,11 +38,14 @@ typedef cublasStatus_t (*cublas_dgemm_v2_t) ( cublasHandle_t handle,
 
 %}
 
-%option no_taskpool_instance = true  /* can be anything */
 extern "DPCPP" %{
+
 #include "parsec/data_dist/matrix/two_dim_rectangle_cyclic.h"
 #include <oneapi/mkl.hpp>
+
 %}
+
+%option no_taskpool_instance = true  /* can be anything */
 
 /*
  * Globals

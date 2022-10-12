@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021      The University of Tennessee and The University
+ * Copyright (c) 2021-2022 The University of Tennessee and The University
  *                         of Tennessee Research Foundation.  All rights
  *                         reserved.
  */
@@ -200,7 +200,7 @@ int parsec_level_zero_module_init( int dev_id, ze_driver_handle_t ze_driver, ze_
         gpu_device->super.name = "";
     gpu_device->data_avail_epoch = 0;
 
-    gpu_device->max_exec_streams = PARSEC_MAX_STREAMS;
+    gpu_device->max_exec_streams = parsec_level_zero_max_streams;
     gpu_device->exec_stream =
         (parsec_gpu_exec_stream_t**)malloc(gpu_device->max_exec_streams * sizeof(parsec_gpu_exec_stream_t*));
     gpu_device->exec_stream[0] =
@@ -2629,7 +2629,7 @@ parsec_level_zero_kernel_scheduler( parsec_execution_stream_t *es,
 
  fetch_task_from_shared_queue:
     assert( NULL == gpu_task );
-    if (1 == parsec_LEVEL_ZERO_sort_pending_list && out_task_submit == NULL && out_task_pop == NULL) {
+    if (1 == parsec_level_zero_sort_pending_list && out_task_submit == NULL && out_task_pop == NULL) {
         parsec_gpu_sort_pending_list(gpu_device);
     }
     gpu_task = (parsec_gpu_task_t*)parsec_fifo_try_pop( &(gpu_device->pending) );
