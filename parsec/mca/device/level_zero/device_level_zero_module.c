@@ -359,9 +359,9 @@ int parsec_level_zero_module_init( int dev_id, ze_driver_handle_t ze_driver, ze_
 
     device->type                 = PARSEC_DEV_LEVEL_ZERO;
     device->executed_tasks       = 0;
-    device->transferred_data_in  = 0;
-    device->d2d_transfer         = 0;
-    device->transferred_data_out = 0;
+    device->data_in_array_size   = 0;     // We'll let the modules_attach allocate the array of the right size for us
+    device->data_in_from_device  = NULL;
+    device->data_out_to_host     = 0;
     device->required_data_in     = 0;
     device->required_data_out    = 0;
 
@@ -1425,12 +1425,9 @@ parsec_gpu_data_stage_in( parsec_device_level_zero_module_t* level_zero_device,
                 assert(0);
                 return -1;
             }
-
-            if( in_elem_dev->super.super.type != PARSEC_DEV_LEVEL_ZERO )
-                gpu_device->super.transferred_data_in += nb_elts;
-            else
-                gpu_device->super.d2d_transfer += nb_elts;
-            if( GPU_TASK_TYPE_KERNEL == gpu_task->task_type )
+            assert(in_elem_dev->super.super.device_index < gpu_device->super.data_in_array_size);
+            gpu_device->super.data_in_from_device[in_elem_dev->super.super.device_index] += nb_elts;
+            if( PARSEC_GPU_TASK_TYPE_KERNEL == gpu_task->task_type )
                 gpu_device->super.nb_data_faults += nb_elts;
 
             /* update the data version in GPU immediately, and mark the data under transfer */
@@ -1491,7 +1488,6 @@ static parsec_task_class_t parsec_level_zero_data_prefetch_tc = {
     .initial_data = NULL,
     .final_data = NULL,
     .data_affinity = NULL,
-    .key_generator = NULL,
     .key_functions = NULL,
     .make_key = NULL,
     .get_datatype = NULL,
@@ -1653,7 +1649,6 @@ static parsec_task_class_t parsec_level_zero_d2d_complete_tc = {
     .initial_data = NULL,
     .final_data = NULL,
     .data_affinity = NULL,
-    .key_generator = NULL,
     .key_functions = NULL,
     .make_key = NULL,
     .get_datatype = NULL,
@@ -1708,7 +1703,6 @@ parsec_gpu_callback_complete_push(parsec_device_gpu_module_t   *gpu_device,
                                   parsec_gpu_task_t           **gpu_task,
                                   parsec_gpu_exec_stream_t     *gpu_stream)
 {
-    parsec_device_level_zero_module_t* level_zero_device = (parsec_device_level_zero_module_t*)gpu_device;
     (void)gpu_stream;
 
     parsec_gpu_task_t *gtask = *gpu_task;
@@ -1900,11 +1894,11 @@ parsec_gpu_callback_complete_push(parsec_device_gpu_module_t   *gpu_device,
 static inline int
 progress_stream( parsec_device_gpu_module_t* gpu_device,
                  parsec_gpu_exec_stream_t* stream,
-                 advance_task_function_t upstream_progress_fct,
+                 parsec_advance_task_function_t upstream_progress_fct,
                  parsec_gpu_task_t* task,
                  parsec_gpu_task_t** out_task )
 {
-    advance_task_function_t progress_fct;
+    parsec_advance_task_function_t progress_fct;
     int saved_rc = 0, rc;
 #if defined(PARSEC_DEBUG_NOISIER)
     char task_str[MAX_TASK_STRLEN];
@@ -2282,7 +2276,7 @@ parsec_gpu_kernel_pop( parsec_device_gpu_module_t   *gpu_device,
                     parsec_atomic_unlock(&original->lock);
                     goto release_and_return_error;
                 }
-                gpu_device->super.transferred_data_out += nb_elts; /* TODO: not hardcoded, use datatype size */
+                gpu_device->super.data_out_to_host += nb_elts; /* TODO: not hardcoded, use datatype size */
                 how_many++;
             } else {
                 assert( 0 == gpu_copy->readers );
@@ -2562,7 +2556,7 @@ parsec_level_zero_kernel_scheduler( parsec_execution_stream_t *es,
             progress_task = NULL;
         }
         /* If we can extract data go for it, otherwise try to drain the pending tasks */
-        gpu_task = parsec_gpu_create_W2R_task(gpu_device, es);
+        gpu_task = parsec_gpu_create_w2r_task(gpu_device, es);
         if( NULL != gpu_task )
             goto get_data_out_of_device;
     }
@@ -2629,7 +2623,7 @@ parsec_level_zero_kernel_scheduler( parsec_execution_stream_t *es,
 
  fetch_task_from_shared_queue:
     assert( NULL == gpu_task );
-    if (1 == parsec_level_zero_sort_pending_list && out_task_submit == NULL && out_task_pop == NULL) {
+    if (1 == parsec_level_zero_sort_pending && out_task_submit == NULL && out_task_pop == NULL) {
         parsec_gpu_sort_pending_list(gpu_device);
     }
     gpu_task = (parsec_gpu_task_t*)parsec_fifo_try_pop( &(gpu_device->pending) );
@@ -2659,7 +2653,7 @@ parsec_level_zero_kernel_scheduler( parsec_execution_stream_t *es,
     /* Everything went fine so far, the result is correct and back in the main memory */
     PARSEC_LIST_ITEM_SINGLETON(gpu_task);
     if (gpu_task->task_type == GPU_TASK_TYPE_D2HTRANSFER) {
-        parsec_gpu_W2R_task_fini(gpu_device, gpu_task, es);
+        parsec_gpu_complete_w2r_task(gpu_device, gpu_task, es);
         gpu_task = progress_task;
         goto fetch_task_from_shared_queue;
     }
