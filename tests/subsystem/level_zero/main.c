@@ -118,9 +118,6 @@ static int init_device(device_t *device, ze_device_handle_t gpuDevice)
                                          &commandQueueDesc, &device->streams[j].cq);
             LEVEL_ZERO_CHECK_ERROR( "zeCommandQueueCreate ", ze_rc, { return -1;} );
             ze_command_list_desc_t commandListDesc = {
-                    ZE_STRUCTURE_TYPE_COMMAND_LIST_DESC,
-                    NULL,
-                    computeQueueGroupOrdinal,
                     0 // flags
             };
             ze_rc = zeCommandListCreate(device->driver->context, gpuDevice,
@@ -157,10 +154,6 @@ static int init_driver(driver_t *driver, int maxDevices)
 
     ze_rc = zeDeviceGet(driver->driver, &deviceCount, NULL);
     LEVEL_ZERO_CHECK_ERROR( "zeDeviceGet (count) ", ze_rc, { return -1; } );
-
-    driver->nb_devices = 0;
-    driver->devices = NULL;
-
     if(deviceCount == 0)
         return 0;
 
@@ -338,13 +331,3 @@ int main(int argc, char *argv[])
                     } else {
                         usleep(1000);
                     }
-                } while(1);
-            } else {
-                fprintf(stderr, "Skipping device %d which failed at allocating data\n", did);
-            }
-            did++;
-        }
-    }
-
-    return EXIT_SUCCESS;
-}
