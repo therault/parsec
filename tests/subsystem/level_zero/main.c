@@ -289,6 +289,9 @@ int main(int argc, char *argv[])
         }
     }
 
+    ze_rc = zeInit( 0 );
+    LEVEL_ZERO_CHECK_ERROR( "zeInit ", ze_rc, { return -1; });
+
     // Discover all the driver instances
     ze_rc = zeDriverGet(&driverCount, NULL);
     LEVEL_ZERO_CHECK_ERROR( "zeDriverGet (count) ", ze_rc, { return 1; } );
