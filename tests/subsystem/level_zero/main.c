@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <level_zero/ze_api.h>
 #include "interface.dpcpp.h"
 
