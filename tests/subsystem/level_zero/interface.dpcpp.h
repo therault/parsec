@@ -1,17 +1,27 @@
 #ifndef INTERFACE_DPCPP_H
 #define INTERFACE_DPCPP_H
 
+typedef struct sycl_wrapper_s sycl_wrapper_t;
+
 #if defined(c_plusplus) || defined(__cplusplus)
 #include "sycl/ext/oneapi/backend/level_zero.hpp"
+
+struct sycl_wrapper_s {
+    sycl::platform platform;
+    sycl::device   device;
+    sycl::context  context;
+    sycl::queue    queue;
+};
 
 extern "C" {
 #endif
 
-void * sycl_queue_create(ze_driver_handle_t ze_driver,
+
+sycl_wrapper_t *sycl_queue_create(ze_driver_handle_t ze_driver,
                          ze_device_handle_t ze_device,
                          ze_context_handle_t ze_context,
                          ze_command_queue_handle_t ze_queue);
-int sycl_queue_destroy(void *_queue);
+int sycl_queue_destroy(sycl_wrapper_t *_queue);
 
 #if defined(c_plusplus) || defined(__cplusplus)
 }
