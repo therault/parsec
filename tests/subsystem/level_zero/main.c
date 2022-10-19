@@ -31,21 +31,32 @@ typedef struct device_s {
 typedef struct driver_s {
     ze_driver_handle_t  driver;
     ze_context_handle_t context;
-    int                nb_devices;
-    devices_t         *devices;
+    int                 nb_devices;
+    device_t           *devices;
 } driver_t;
+
+#define LEVEL_ZERO_CHECK_ERROR(STR, ERROR, CODE)                       \
+    do {                                                                      \
+        if( ZE_RESULT_SUCCESS != (ERROR) ) {                                  \
+            fprintf(stderr, "%s:%d %s returns Error 0x%x", __FILE__, __LINE__,\
+                            (STR), (ERROR) );                                 \
+            CODE;                                                             \
+        }                                                                     \
+    } while(0)
 
 static int init_device(device_t *device, ze_device_handle_t gpuDevice)
 {
     // Discover all command queue groups
     uint32_t cmdqueueGroupCount = 0;
+    ze_result_t ze_rc;
+
     ze_rc = zeDeviceGetCommandQueueGroupProperties(gpuDevice, &cmdqueueGroupCount, NULL);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeDeviceGetCommandQueueGroupProperties (count) ", ze_rc, { return -1; } );
+    LEVEL_ZERO_CHECK_ERROR( "zeDeviceGetCommandQueueGroupProperties (count) ", ze_rc, { return -1; } );
 
     ze_command_queue_group_properties_t* cmdqueueGroupProperties = (ze_command_queue_group_properties_t*)
                 malloc(cmdqueueGroupCount * sizeof(ze_command_queue_group_properties_t));
     ze_rc = zeDeviceGetCommandQueueGroupProperties(gpuDevice, &cmdqueueGroupCount, cmdqueueGroupProperties);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeDeviceGetCommandQueueGroupProperties (populate) ", ze_rc, { return -1; } );
+    LEVEL_ZERO_CHECK_ERROR( "zeDeviceGetCommandQueueGroupProperties (populate) ", ze_rc, { return -1; } );
 
     // Find a command queue type that support compute
     //TODO: it might be more in line with the design to create different command queues for copy
@@ -80,7 +91,7 @@ static int init_device(device_t *device, ze_device_handle_t gpuDevice)
     };
     ze_rc = zeEventPoolCreate(device->driver->context, &eventPoolDesc, 0, NULL, 
                               &device->eventPool);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeEventPoolCreate ", ze_rc, {return -1;} );
+    LEVEL_ZERO_CHECK_ERROR( "zeEventPoolCreate ", ze_rc, {return -1;} );
 
     for(int j = 0; j < NB_STREAMS; j++ ) {
         ze_command_queue_desc_t commandQueueDesc = {
@@ -99,22 +110,19 @@ static int init_device(device_t *device, ze_device_handle_t gpuDevice)
             ze_rc = zeCommandListCreateImmediate(device->driver->context, gpuDevice,
                                                  &commandQueueDesc,
                                                  &device->streams[j].cl);
-            PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListCreateImmediate ", ze_rc, { return -1;} );
+            LEVEL_ZERO_CHECK_ERROR( "zeCommandListCreateImmediate ", ze_rc, { return -1;} );
         } else {
             device->streams[j].immediate = 0;
             commandQueueDesc.ordinal = computeQueueGroupOrdinal;
             ze_rc = zeCommandQueueCreate(device->driver->context, gpuDevice,
                                          &commandQueueDesc, &device->streams[j].cq);
-            PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandQueueCreate ", ze_rc, { return -1;} );
+            LEVEL_ZERO_CHECK_ERROR( "zeCommandQueueCreate ", ze_rc, { return -1;} );
             ze_command_list_desc_t commandListDesc = {
-                    ZE_STRUCTURE_TYPE_COMMAND_LIST_DESC,
-                    NULL,
-                    computeQueueGroupOrdinal,
                     0 // flags
             };
             ze_rc = zeCommandListCreate(device->driver->context, gpuDevice,
                                         &commandListDesc, &device->streams[j].cl);
-            PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListCreate ", ze_rc, { return -1;} );
+            LEVEL_ZERO_CHECK_ERROR( "zeCommandListCreate ", ze_rc, { return -1;} );
             device->streams[j].sq = sycl_queue_create(device->driver->driver, gpuDevice, device->driver->context, device->streams[j].cq);
             if(NULL == device->streams[j].sq)
                 return -1;
@@ -130,7 +138,7 @@ static int init_device(device_t *device, ze_device_handle_t gpuDevice)
             };
             device->streams[j].events[k]   = NULL;
             ze_rc = zeEventCreate(device->eventPool, &eventDesc, &(device->streams[j].events[k]));
-            PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeEventCreate ", ze_rc, {return -1;} );
+            LEVEL_ZERO_CHECK_ERROR( "zeEventCreate ", ze_rc, {return -1;} );
         }
     }
     device->device = gpuDevice;
@@ -145,18 +153,14 @@ static int init_driver(driver_t *driver, int maxDevices)
     ze_result_t ze_rc;
 
     ze_rc = zeDeviceGet(driver->driver, &deviceCount, NULL);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeDeviceGet (count) ", ze_rc, { return -1; } );
-
-    driver->nb_devices = 0;
-    driver->devices = NULL;
-
+    LEVEL_ZERO_CHECK_ERROR( "zeDeviceGet (count) ", ze_rc, { return -1; } );
     if(deviceCount == 0)
         return 0;
 
     allDevices = (ze_device_handle_t *)malloc(deviceCount * sizeof(ze_device_handle_t));
     gpuDevices = (ze_device_handle_t *)malloc(deviceCount * sizeof(ze_device_handle_t));
     ze_rc = zeDeviceGet(driver->driver, &deviceCount, allDevices);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeDeviceGet (populate) ", ze_rc, { return -1; } );
+    LEVEL_ZERO_CHECK_ERROR( "zeDeviceGet (populate) ", ze_rc, { return -1; } );
 
     int deviceId = 0;
     for(int did = 0; did < deviceCount; did++) {
@@ -186,7 +190,7 @@ static int init_driver(driver_t *driver, int maxDevices)
         0
     };
     ze_rc = zeContextCreateEx(driver->driver, &ctxtDesc, deviceCount, gpuDevices, &driver->context);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeContextCreate ", ze_rc, { continue; } );
+    LEVEL_ZERO_CHECK_ERROR( "zeContextCreate ", ze_rc, { continue; } );
 
     int dpos = 0;
     for(int did = 0; did < deviceCount; did++) {
@@ -219,18 +223,18 @@ static void *allocate_workspace(device_t *device, size_t size)
     int memIndex = -1;
 
     status = zeDeviceGetMemoryAccessProperties(device->device, &memAccessProperties);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR("zeDeviceGetMemoryAccessProperties ", status, { return NULL; });
+    LEVEL_ZERO_CHECK_ERROR("zeDeviceGetMemoryAccessProperties ", status, { return NULL; });
     if( 0 == (ZE_MEMORY_ACCESS_CAP_FLAG_RW & memAccessProperties.deviceAllocCapabilities) ) {
         fprintf(stderr, "Device does not have memory allocation capabilities with RW access\n");
         return NULL;
     }
     status = zeDeviceGetProperties(device, &devProperties);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR("zeDeviceGetProperties ", status, { return NULL; });
+    LEVEL_ZERO_CHECK_ERROR("zeDeviceGetProperties ", status, { return NULL; });
     status = zeDeviceGetMemoryProperties(device, &count, NULL);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR("zeDeviceGetMemoryProperties (count) ", status, { return PARSEC_ERROR; });
+    LEVEL_ZERO_CHECK_ERROR("zeDeviceGetMemoryProperties (count) ", status, { return ERROR; });
     devMemProperties = (ze_device_memory_properties_t*)malloc(count * sizeof(ze_device_memory_properties_t));
     status = zeDeviceGetMemoryProperties(device, &count, devMemProperties);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR("zeDeviceGetMemoryProperties (populate) ", status, { ree(devMemProperties); return NULL; });
+    LEVEL_ZERO_CHECK_ERROR("zeDeviceGetMemoryProperties (populate) ", status, { ree(devMemProperties); return NULL; });
     for(int i = 0; i < (int)count; i++) {
         // TODO: better approach would be to keep a list of pointers?
         //   for now we just take the memory that has the highest amount of memory available
@@ -257,7 +261,7 @@ static void *allocate_workspace(device_t *device, size_t size)
 
     status = zeMemAllocDevice(device->driver->context, &memAllocDesc, size, 128,
                               device->device, &device_ptr);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeMemAllocDevice ", status, { return NULL; } );
+    LEVEL_ZERO_CHECK_ERROR( "zeMemAllocDevice ", status, { return NULL; } );
     return device_ptr;
 }
 
@@ -272,11 +276,11 @@ int main(int argc, char *argv[])
 
     // Discover all the driver instances
     ze_rc = zeDriverGet(&driverCount, NULL);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeDriverGet (count) ", ze_rc, { return 1; } );
+    LEVEL_ZERO_CHECK_ERROR( "zeDriverGet (count) ", ze_rc, { return 1; } );
     drivers = malloc(driverCount * sizeof(driver_t));
     allDrivers = malloc(driverCount * sizeof(ze_driver_handle_t));
     ze_rc = zeDriverGet(&driverCount, allDrivers);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeDriverGet (populate) ", ze_rc, { return 1; } );
+    LEVEL_ZERO_CHECK_ERROR( "zeDriverGet (populate) ", ze_rc, { return 1; } );
     for(int driverId = 0; driverId < driverCount; driverId++) {
         drivers[driverId].driver = allDrivers[driverId];
         if( (int nb = init_driver(&drivers[driverId], max_devices)) <= 0 ) {
@@ -312,28 +316,18 @@ int main(int argc, char *argv[])
                 ze_rc = zeCommandListAppendSignalEvent( device->streams[2].cl, device->streams[2].events[0] );
                 assert(ZE_RESULT_SUCCESS == ze_rc);
                 ze_rc = zeCommandListClose(device->streams[2].cl);
-                PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListClose ", ze_rc, { continue; } );
+                LEVEL_ZERO_CHECK_ERROR( "zeCommandListClose ", ze_rc, { continue; } );
                 ze_rc = zeCommandQueueExecuteCommandLists(device->streams[2].cq, 1, &device->streams[2].cl, NULL);
-                PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandQueueExecuteCommandLists ", ze_rc, { continue; } );
+                LEVEL_ZERO_CHECK_ERROR( "zeCommandQueueExecuteCommandLists ", ze_rc, { continue; } );
                 ze_rc = zeCommandListReset(device->streams[2].cl);
-                PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListReset ", ze_rc, { continue; } );
+                LEVEL_ZERO_CHECK_ERROR( "zeCommandListReset ", ze_rc, { continue; } );
 
                 do {
                     ze_rc = zeEventQueryStatus(device->streams[2].events[0]);
                     if( ZE_RESULT_SUCCESS == rc ) {
                         fprintf(stderr, "STATUS: GEMM ended on device %d of driver %d\n", deviceId, driverId);
                     } else  if( ZE_RESULT_NOT_READY != rc ) {
-                        PARSEC_LEVEL_ZERO_CHECK_ERROR( "(progress_stream) zeEventQueryStatus ", rc, { continue; } );
+                        LEVEL_ZERO_CHECK_ERROR( "(progress_stream) zeEventQueryStatus ", rc, { continue; } );
                     } else {
                         usleep(1000);
                     }
-                } while(1);
-            } else {
-                fprintf(stderr, "Skipping device %d which failed at allocating data\n", did);
-            }
-            did++;
-        }
-    }
-
-    return EXIT_SUCCESS;
-}
