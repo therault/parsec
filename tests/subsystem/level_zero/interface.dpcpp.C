@@ -1,7 +1,7 @@
 #include "level_zero/ze_api.h"
 #include "interface.dpcpp.h"
 
-sycl_wrapper_t *sycl_queue_create(ze_driver_handle_t ze_driver,
+sycl_wrapper_t *sycl_wrapper_create(ze_driver_handle_t ze_driver,
                          ze_device_handle_t ze_device,
                          ze_context_handle_t ze_context,
                          ze_command_queue_handle_t ze_queue)
@@ -20,8 +20,8 @@ sycl_wrapper_t *sycl_queue_create(ze_driver_handle_t ze_driver,
     return res;
 }
 
-int sycl_queue_destroy(sycl_wrapper_t *sycl_obj)
+int sycl_wrapper_destroy(sycl_wrapper_t *sw)
 {
-    delete sycl_obj;
+    delete sw;
     return 0;
 }

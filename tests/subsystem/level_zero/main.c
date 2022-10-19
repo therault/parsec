@@ -21,7 +21,7 @@ struct stream_s;
 
 typedef struct stream_s {
     int                       immediate;
-    void                     *sq;
+    sycl_wrapper_t           *sw;
     ze_command_queue_handle_t cq;
     ze_command_list_handle_t  cl;
     struct device_s          *device;
@@ -73,11 +73,15 @@ static int init_device(device_t *device, ze_device_handle_t gpuDevice)
     for( uint32_t i = 0; i < cmdqueueGroupCount &&
                          (computeQueueGroupOrdinal == cmdqueueGroupCount ||
                           copyQueueGroupOrdinal == cmdqueueGroupCount); ++i ) {
-        if( computeQueueGroupOrdinal == cmdqueueGroupCount && cmdqueueGroupProperties[ i ].flags & ZE_COMMAND_QUEUE_GROUP_PROPERTY_FLAG_COMPUTE ) {
-            computeQueueGroupOrdinal = i;
+        if( cmdqueueGroupProperties[ i ].flags & ZE_COMMAND_QUEUE_GROUP_PROPERTY_FLAG_COMPUTE ) {
+            fprintf(stderr, "INFO: cmdqueueGroup number %d can be used as compute queue\n", i);
+            if(cmdqueueGroupCount == computeQueueGroupOrdinal)
+                computeQueueGroupOrdinal = i;
         }
-        if( copyQueueGroupOrdinal == cmdqueueGroupCount && cmdqueueGroupProperties[ i ].flags & ZE_COMMAND_QUEUE_GROUP_PROPERTY_FLAG_COPY ) {
-            copyQueueGroupOrdinal = i;
+        if( cmdqueueGroupProperties[ i ].flags & ZE_COMMAND_QUEUE_GROUP_PROPERTY_FLAG_COPY ) {
+            fprintf(stderr, "INFO: cmdqueueGroup number %d can be used as copy queue\n", i);
+            if(cmdqueueGroupCount == copyQueueGroupOrdinal)
+                copyQueueGroupOrdinal = i;
         }
     }
     if( computeQueueGroupOrdinal == cmdqueueGroupCount ) {
@@ -88,6 +92,7 @@ static int init_device(device_t *device, ze_device_handle_t gpuDevice)
         fprintf(stderr,  "level zero device: unable to find a Queue Group with COMPUTE flag");
         return -1;
     }
+    fprintf(stderr, "INFO: computeQueueGroupOrdinal = %d, copyQueueGroupOrdinal = %d\n", computeQueueGroupOrdinal, copyQueueGroupOrdinal);
 
     // Create event pool
     ze_event_pool_desc_t eventPoolDesc = {
@@ -111,7 +116,7 @@ static int init_device(device_t *device, ze_device_handle_t gpuDevice)
             ZE_COMMAND_QUEUE_PRIORITY_NORMAL
         };
         device->streams[j].device = device;
-        if( j < 2 ) {
+        if( 0 && j < 2 ) {
             device->streams[j].immediate = 1;
             commandQueueDesc.ordinal = copyQueueGroupOrdinal;
             ze_rc = zeCommandListCreateImmediate(device->driver->context, gpuDevice,
@@ -130,8 +135,8 @@ static int init_device(device_t *device, ze_device_handle_t gpuDevice)
             ze_rc = zeCommandListCreate(device->driver->context, gpuDevice,
                                         &commandListDesc, &device->streams[j].cl);
             LEVEL_ZERO_CHECK_ERROR( "zeCommandListCreate ", ze_rc, { return -1;} );
-            device->streams[j].sq = sycl_queue_create(device->driver->driver, gpuDevice, device->driver->context, device->streams[j].cq);
-            if(NULL == device->streams[j].sq)
+            device->streams[j].sw = sycl_wrapper_create(device->driver->driver, gpuDevice, device->driver->context, device->streams[j].cq);
+            if(NULL == device->streams[j].sw)
                 return -1;
         }
 
@@ -259,6 +264,10 @@ static void *allocate_workspace(device_t *device, size_t size)
         return NULL;
     }
     free(devMemProperties); devMemProperties = NULL;
+
+    device_ptr = sycl_malloc(device->streams[2].sw, size);
+    assert(NULL != device_ptr);
+    /*
     ze_device_mem_alloc_desc_t memAllocDesc = {
             .stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
             .pNext = NULL,
@@ -269,6 +278,7 @@ static void *allocate_workspace(device_t *device, size_t size)
     status = zeMemAllocDevice(device->driver->context, &memAllocDesc, size, 128,
                               device->device, &device_ptr);
     LEVEL_ZERO_CHECK_ERROR( "zeMemAllocDevice ", status, { return NULL; } );
+    */
     return device_ptr;
 }
 
@@ -330,7 +340,7 @@ int main(int argc, char *argv[])
             device_t *device = &drivers[driverId].devices[deviceId];
             if(NULL != device_workspace[did]) {
                 fprintf(stderr, "STATUS: Ready to submit GEMM[%d] on device %d of driver %d\n", run, deviceId, driverId);
-                dpcpp_kernel_GEMM(device->streams[2].sq, &((double*)device_workspace[did])[0], &((double*)device_workspace[did])[N*N*sizeof(double)], N);
+                dpcpp_kernel_GEMM(device->streams[2].sw, &((double*)device_workspace[did])[0], &((double*)device_workspace[did])[N*N*sizeof(double)], N);
                 fprintf(stderr, "STATUS: GEMM[%d] submitted on device %d of driver %d\n", run, deviceId, driverId);
 
                 ze_rc = zeCommandListAppendSignalEvent( device->streams[2].cl, device->streams[2].events[0] );

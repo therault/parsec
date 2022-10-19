@@ -9,13 +9,11 @@ extern "C" {
                        int mb);
 }
 
-int dpcpp_kernel_GEMM(void *_sw,
+int dpcpp_kernel_GEMM(sycl_wrapper_t *sw,
                       const double *A,
                       double *C,
                       int mb)
 {
-    sycl_wrapper_t *sw = reinterpret_cast<sycl_wrapper_t *>(_sw);
-
     double alpha=0.0;
     double beta=1.0;
     try {
@@ -42,4 +40,14 @@ int dpcpp_kernel_GEMM(void *_sw,
     fprintf(stderr, "kernel has been scheduled on OneAPI MKL BLAS using the DPC++ driver\n");
 
     return 0;
+}
+
+void *sycl_malloc(sycl_wrapper_t *sw, size_t size)
+{
+  return sycl::malloc_device(size, sw->queue);
+}
+
+void sycl_free(sycl_wrapper_t *sw, void *ptr)
+{
+  sycl::free(ptr, sw->queue);
 }
