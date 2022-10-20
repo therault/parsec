@@ -1291,6 +1291,7 @@ parsec_dtd_taskpool_release( parsec_taskpool_t *tp )
         }
 
         parsec_taskpool_unregister( tp );
+        if(NULL != tp->tdm.module) { tp->tdm.module->unmonitor_taskpool(tp); }
         parsec_thread_mempool_free( parsec_dtd_taskpool_mempool->thread_mempools, dtd_tp );
     }
 }
