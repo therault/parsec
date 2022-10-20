@@ -3,25 +3,35 @@
 #include "interface.dpcpp.h"
 
 extern "C" {
- int dpcpp_kernel_GEMM(void *_sw,
+ int dpcpp_kernel_GEMM(sycl_wrapper_driver_t *swp,
+		       sycl_wrapper_device_t *swd,
+		       sycl_wrapper_queue_t *swq,
                        const double *A,
                        double *C,
                        int mb);
 }
 
-int dpcpp_kernel_GEMM(sycl_wrapper_t *sw,
+int dpcpp_kernel_GEMM(sycl_wrapper_driver_t *swp,
+                      sycl_wrapper_device_t *swd,
+                      sycl_wrapper_queue_t *swq,
                       const double *A,
                       double *C,
                       int mb)
 {
     double alpha=0.0;
     double beta=1.0;
+    sycl::backend_input_t<sycl::backend::ext_oneapi_level_zero, sycl::buffer<double, 1>> hBufferInteropInputA = { (void*)A, sycl::ext::oneapi::level_zero::ownership::keep };
+    sycl::buffer<double, 1> bA = sycl::make_buffer<sycl::backend::ext_oneapi_level_zero, double, 1>(hBufferInteropInputA, swp->context);
+    auto bbA = bA.reinterpret<double, 1>(sycl::range<1>(mb*mb));
+    sycl::backend_input_t<sycl::backend::ext_oneapi_level_zero, sycl::buffer<double, 1>> hBufferInteropInputC = { (void*)C, sycl::ext::oneapi::level_zero::ownership::keep };
+    sycl::buffer<double, 1> bC = sycl::make_buffer<sycl::backend::ext_oneapi_level_zero, double, 1>(hBufferInteropInputC, swp->context);
+    auto bbC = bC.reinterpret<double, 1>(sycl::range<1>(mb*mb));
     try {
-      oneapi::mkl::blas::gemm(sw->queue, oneapi::mkl::transpose::N, oneapi::mkl::transpose::N,
+      oneapi::mkl::blas::gemm(swq->queue, oneapi::mkl::transpose::N, oneapi::mkl::transpose::N,
          mb, mb, mb,
-         alpha, A, mb,
-         A, mb,
-         beta, C, mb);
+         alpha, bbA, mb,
+         bbA, mb,
+         beta, bbC, mb);
     } catch (const oneapi::mkl::invalid_argument &e) {
       fprintf(stderr, "OneAPI MKL BLAS GEMM throws invalid argument exception\n");
     } catch (const oneapi::mkl::unsupported_device &e) {
@@ -41,7 +51,7 @@ int dpcpp_kernel_GEMM(sycl_wrapper_t *sw,
 
     return 0;
 }
-
+/*
 void *sycl_malloc(sycl_wrapper_t *sw, size_t size)
 {
   return sycl::malloc_device(size, sw->queue);
@@ -51,3 +61,4 @@ void sycl_free(sycl_wrapper_t *sw, void *ptr)
 {
   sycl::free(ptr, sw->queue);
 }
+*/

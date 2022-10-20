@@ -6,10 +6,12 @@
 #include <level_zero/ze_api.h>
 #include "interface.dpcpp.h"
 
-int dpcpp_kernel_GEMM(void *_queue,
-                      const double *A,
-                      double *C,
-                      int mb);
+int dpcpp_kernel_GEMM(sycl_wrapper_driver_t *swp,
+		       sycl_wrapper_device_t *swd,
+		       sycl_wrapper_queue_t *swq,
+                       const double *A,
+                       double *C,
+                       int mb);
 
 struct driver_s;
 struct device_s;
@@ -21,7 +23,7 @@ struct stream_s;
 
 typedef struct stream_s {
     int                       immediate;
-    sycl_wrapper_t           *sw;
+    sycl_wrapper_queue_t     *swq;
     ze_command_queue_handle_t cq;
     ze_command_list_handle_t  cl;
     struct device_s          *device;
@@ -29,17 +31,19 @@ typedef struct stream_s {
 } stream_t;
 
 typedef struct device_s {
-    ze_device_handle_t device;
-    struct driver_s   *driver;
-    ze_event_pool_handle_t eventPool;
-    stream_t           streams[NB_STREAMS];
+    ze_device_handle_t       device;
+    struct driver_s         *driver;
+    sycl_wrapper_device_t   *swd;
+    ze_event_pool_handle_t   eventPool;
+    stream_t                 streams[NB_STREAMS];
 } device_t;
 
 typedef struct driver_s {
-    ze_driver_handle_t  driver;
-    ze_context_handle_t context;
-    int                 nb_devices;
-    device_t           *devices;
+    ze_driver_handle_t     driver;
+    ze_context_handle_t    context;
+    sycl_wrapper_driver_t *swp;
+    int                    nb_devices;
+    device_t              *devices;
 } driver_t;
 
 #define LEVEL_ZERO_CHECK_ERROR(STR, ERROR, CODE)                       \
@@ -135,9 +139,6 @@ static int init_device(device_t *device, ze_device_handle_t gpuDevice)
             ze_rc = zeCommandListCreate(device->driver->context, gpuDevice,
                                         &commandListDesc, &device->streams[j].cl);
             LEVEL_ZERO_CHECK_ERROR( "zeCommandListCreate ", ze_rc, { return -1;} );
-            device->streams[j].sw = sycl_wrapper_create(device->driver->driver, gpuDevice, device->driver->context, device->streams[j].cq);
-            if(NULL == device->streams[j].sw)
-                return -1;
         }
 
         for(int k = 0; k < MAX_EVENTS; k++ ) {
@@ -201,7 +202,7 @@ static int init_driver(driver_t *driver, int maxDevices)
         NULL,
         0
     };
-    ze_rc = zeContextCreateEx(driver->driver, &ctxtDesc, deviceCount, gpuDevices, &driver->context);
+    ze_rc = zeContextCreate(driver->driver, &ctxtDesc, &driver->context);
     LEVEL_ZERO_CHECK_ERROR( "zeContextCreate ", ze_rc, { continue; } );
 
     int dpos = 0;
@@ -218,9 +219,23 @@ static int init_driver(driver_t *driver, int maxDevices)
     if(deviceCount == 0) {
         free(driver->devices);
         driver->devices = NULL;
+	return 0;
+    }
+    free(gpuDevices);
+
+    driver->swp = sycl_wrapper_platform_create(driver->driver);
+    sycl_wrapper_device_t *swd[deviceCount];
+    for(int did = 0; did < (int)deviceCount; did++) {
+        driver->devices[did].swd = sycl_wrapper_device_create(driver->devices[did].device);
+        swd[did] = driver->devices[did].swd;
+    }
+    sycl_wrapper_platform_add_context(driver->swp, driver->context, swd, deviceCount);
+    for(int did = 0; did < (int)deviceCount; did++) {
+        for(int sid = 0; sid < NB_STREAMS; sid++) {
+            driver->devices[did].streams[sid].swq = sycl_wrapper_queue_create(driver->swp, driver->devices[did].swd, driver->devices[did].streams[sid].cq);
+	}
     }
 
-    free(gpuDevices);
     return deviceCount;
 }
 
@@ -265,9 +280,8 @@ static void *allocate_workspace(device_t *device, size_t size)
     }
     free(devMemProperties); devMemProperties = NULL;
 
-    device_ptr = sycl_malloc(device->streams[2].sw, size);
-    assert(NULL != device_ptr);
-    /*
+    /*device_ptr = sycl_malloc(device->streams[2].sw, size);
+    assert(NULL != device_ptr); */
     ze_device_mem_alloc_desc_t memAllocDesc = {
             .stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
             .pNext = NULL,
@@ -278,7 +292,6 @@ static void *allocate_workspace(device_t *device, size_t size)
     status = zeMemAllocDevice(device->driver->context, &memAllocDesc, size, 128,
                               device->device, &device_ptr);
     LEVEL_ZERO_CHECK_ERROR( "zeMemAllocDevice ", status, { return NULL; } );
-    */
     return device_ptr;
 }
 
@@ -289,7 +302,7 @@ int main(int argc, char *argv[])
     driver_t *drivers;
     ze_driver_handle_t *allDrivers;
     int max_devices = 1024*1024, nb_devices = 0;
-    void **device_workspace;
+    void **device_workspaceA, **device_workspaceC;
 
     if(argc > 1) {
         max_devices = atoi(argv[1]);
@@ -305,6 +318,7 @@ int main(int argc, char *argv[])
     // Discover all the driver instances
     ze_rc = zeDriverGet(&driverCount, NULL);
     LEVEL_ZERO_CHECK_ERROR( "zeDriverGet (count) ", ze_rc, { return 1; } );
+    fprintf(stderr, "STATUS: found %d drivers\n", driverCount);
     drivers = malloc(driverCount * sizeof(driver_t));
     allDrivers = malloc(driverCount * sizeof(ze_driver_handle_t));
     ze_rc = zeDriverGet(&driverCount, allDrivers);
@@ -316,6 +330,7 @@ int main(int argc, char *argv[])
             fprintf(stderr, "%d device found in driver %d... Bailing out\n", nb_devices, driverId);
             return 1;
         } else {
+	    fprintf(stderr, "STATUS: there are %d GPU devices in driver %d\n", nb, driverId);
             nb_devices += nb;
         }
     }
@@ -323,11 +338,13 @@ int main(int argc, char *argv[])
     fprintf(stderr, "%d devices found and initialized\n", nb_devices);
 
     //Allocate GPU memory for each device
-    device_workspace = (void**)malloc(sizeof(void*)*nb_devices);
+    device_workspaceA = (void**)malloc(sizeof(void*)*nb_devices);
+    device_workspaceC = (void**)malloc(sizeof(void*)*nb_devices);
     int did = 0;
     for(int driverId = 0; driverId < (int)driverCount; driverId++) {
         for(int deviceId = 0; deviceId < drivers[driverId].nb_devices; deviceId++) {
-            device_workspace[did] = allocate_workspace(&drivers[driverId].devices[deviceId], sizeof(double)*N*N*2);
+            device_workspaceA[did] = allocate_workspace(&drivers[driverId].devices[deviceId], sizeof(double)*N*N);
+	    device_workspaceC[did] = allocate_workspace(&drivers[driverId].devices[deviceId], sizeof(double)*N*N);
             did++;
         }
     }
@@ -338,9 +355,10 @@ int main(int argc, char *argv[])
     for(int driverId = 0; driverId < (int)driverCount; driverId++) {
         for(int deviceId = 0; deviceId < drivers[driverId].nb_devices; deviceId++) {
             device_t *device = &drivers[driverId].devices[deviceId];
-            if(NULL != device_workspace[did]) {
+            if(NULL != device_workspaceA[did] && NULL != device_workspaceC[did]) {
                 fprintf(stderr, "STATUS: Ready to submit GEMM[%d] on device %d of driver %d\n", run, deviceId, driverId);
-                dpcpp_kernel_GEMM(device->streams[2].sw, &((double*)device_workspace[did])[0], &((double*)device_workspace[did])[N*N*sizeof(double)], N);
+		fprintf(stderr, "STATUS: Context of driver %d is %s\n", driverId, zeContextGetStatus(drivers[driverId].context) == ZE_RESULT_SUCCESS ? "Fine" : "Broken");
+                dpcpp_kernel_GEMM(device->driver->swp, device->swd, device->streams[2].swq, (double*)device_workspaceA[did], (double*)device_workspaceC[did], N);
                 fprintf(stderr, "STATUS: GEMM[%d] submitted on device %d of driver %d\n", run, deviceId, driverId);
 
                 ze_rc = zeCommandListAppendSignalEvent( device->streams[2].cl, device->streams[2].events[0] );
