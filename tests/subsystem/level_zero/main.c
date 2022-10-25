@@ -343,7 +343,7 @@ int main(int argc, char *argv[])
     int did = 0;
     for(int driverId = 0; driverId < (int)driverCount; driverId++) {
         for(int deviceId = 0; deviceId < drivers[driverId].nb_devices; deviceId++) {
-            device_workspaceA[did] = allocate_workspace(&drivers[driverId].devices[deviceId], sizeof(double)*N*N);
+            device_workspaceA[did] = allocate_workspace(&drivers[driverId].devices[deviceId], sizeof(double)*N*N*2);
 	    device_workspaceC[did] = allocate_workspace(&drivers[driverId].devices[deviceId], sizeof(double)*N*N);
             did++;
         }
@@ -358,7 +358,7 @@ int main(int argc, char *argv[])
             if(NULL != device_workspaceA[did] && NULL != device_workspaceC[did]) {
                 fprintf(stderr, "STATUS: Ready to submit GEMM[%d] on device %d of driver %d\n", run, deviceId, driverId);
 		fprintf(stderr, "STATUS: Context of driver %d is %s\n", driverId, zeContextGetStatus(drivers[driverId].context) == ZE_RESULT_SUCCESS ? "Fine" : "Broken");
-                dpcpp_kernel_GEMM(device->driver->swp, device->swd, device->streams[2].swq, (double*)device_workspaceA[did], (double*)device_workspaceC[did], N);
+                dpcpp_kernel_GEMM(device->driver->swp, device->swd, device->streams[2].swq, (double*)device_workspaceA[did], &(((double*)device_workspaceC[did])[N*N]), N);
                 fprintf(stderr, "STATUS: GEMM[%d] submitted on device %d of driver %d\n", run, deviceId, driverId);
 
                 ze_rc = zeCommandListAppendSignalEvent( device->streams[2].cl, device->streams[2].events[0] );
