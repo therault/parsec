@@ -150,7 +150,7 @@ parsec_device_level_zero_detach( parsec_device_module_t* device,
     return parsec_mca_device_remove(device);
 }
 
-int parsec_level_zero_module_init( int dev_id, ze_driver_handle_t ze_driver, ze_device_handle_t ze_device,
+int parsec_level_zero_module_init( int dev_id, parsec_device_level_zero_driver_t *driver, ze_device_handle_t ze_device,
                                    ze_device_properties_t *prop, parsec_device_module_t** module )
 {
     int streaming_multiprocessor, len;
@@ -178,22 +178,8 @@ int parsec_level_zero_module_init( int dev_id, ze_driver_handle_t ze_driver, ze_
     device = &gpu_device->super;
     PARSEC_OBJ_CONSTRUCT(level_zero_device, parsec_device_level_zero_module_t);
     level_zero_device->level_zero_index = (uint8_t)dev_id;
-    level_zero_device->ze_driver = ze_driver;
+    level_zero_device->driver = driver;
     level_zero_device->ze_device = ze_device;
-
-    // Create context
-    ze_context_desc_t ctxtDesc = {
-            ZE_STRUCTURE_TYPE_CONTEXT_DESC,
-            NULL,
-            0
-    };
-
-    ze_rc = zeContextCreate(ze_driver, &ctxtDesc, &level_zero_device->ze_context);
-    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeContextCreate ", ze_rc,
-                                   {
-                                       free(level_zero_device);
-                                       return PARSEC_ERROR;
-                                   } );
 
     len = asprintf(&gpu_device->super.name, "%s ZE(%d)", szName, dev_id);
     if(-1 == len)
@@ -257,14 +243,14 @@ int parsec_level_zero_module_init( int dev_id, ze_driver_handle_t ze_driver, ze_
         };
         if( j < 2 ) {
             commandQueueDesc.ordinal = copyQueueGroupOrdinal;
-            ze_rc = zeCommandListCreateImmediate(level_zero_device->ze_context, level_zero_device->ze_device,
+            ze_rc = zeCommandListCreateImmediate(level_zero_device->driver->ze_context, level_zero_device->ze_device,
                                                  &commandQueueDesc,
                                                  &level_zero_stream->level_zero_cl);
             PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListCreateImmediate ", ze_rc,
                                            {goto release_device;} );
         } else {
             commandQueueDesc.ordinal = computeQueueGroupOrdinal;
-            ze_rc = zeCommandQueueCreate(level_zero_device->ze_context, level_zero_device->ze_device,
+            ze_rc = zeCommandQueueCreate(level_zero_device->driver->ze_context, level_zero_device->ze_device,
                                          &commandQueueDesc, &level_zero_stream->level_zero_cq);
             PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandQueueCreate ", ze_rc,
                                            {goto release_device;} );
@@ -274,15 +260,10 @@ int parsec_level_zero_module_init( int dev_id, ze_driver_handle_t ze_driver, ze_
                     computeQueueGroupOrdinal,
                     0 // flags
             };
-            ze_rc = zeCommandListCreate(level_zero_device->ze_context, level_zero_device->ze_device,
+            ze_rc = zeCommandListCreate(level_zero_device->driver->ze_context, level_zero_device->ze_device,
                                         &commandListDesc, &level_zero_stream->level_zero_cl);
             PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListCreate ", ze_rc,
                                            {goto release_device;} );
-            level_zero_stream->dpcpp_obj = parsec_dpcpp_queue_create(level_zero_device->ze_driver,
-                                                                       level_zero_device->ze_device,
-                                                                       level_zero_device->ze_context,
-                                                                       level_zero_stream->level_zero_cq);
-            assert(NULL != level_zero_stream->dpcpp_obj);
         }
         exec_stream->workspace    = NULL;
         PARSEC_OBJ_CONSTRUCT(&exec_stream->infos, parsec_info_object_array_t);
@@ -305,7 +286,7 @@ int parsec_level_zero_module_init( int dev_id, ze_driver_handle_t ze_driver, ze_
                 ZE_EVENT_POOL_FLAG_HOST_VISIBLE, // all events in pool are visible to Host
                 1 // count
         };
-        zeEventPoolCreate(level_zero_device->ze_context, &eventPoolDesc, 0, NULL, 
+        zeEventPoolCreate(level_zero_device->driver->ze_context, &eventPoolDesc, 0, NULL, 
                           &level_zero_stream->ze_event_pool);
 
         /* and the corresponding events */
@@ -496,16 +477,14 @@ parsec_level_zero_module_fini(parsec_device_module_t* device)
         free(exec_stream->tasks); exec_stream->tasks = NULL;
         free(exec_stream->fifo_pending); exec_stream->fifo_pending = NULL;
         /* Release the stream */
-        if(k < 2) {
-            ze_result_t ze_rc;
-            ze_rc = zeCommandListDestroy(level_zero_stream->level_zero_cl);
-            PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListDestroy ", ze_rc,
+        ze_result_t ze_rc;
+        ze_rc = zeCommandListDestroy(level_zero_stream->level_zero_cl);
+        PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListDestroy ", ze_rc,
+                                        {continue;} );
+        if(k >= 2) {
+            ze_rc = zeCommandQueueDestroy(level_zero_stream->level_zero_cq);
+            PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandQueueDestroy ", ze_rc,
                                            {continue;} );
-        } else {
-            int rc;
-            rc = parsec_dpcpp_queue_destroy(level_zero_stream->dpcpp_obj);
-            assert(PARSEC_SUCCESS == rc);
-            level_zero_stream->dpcpp_obj = NULL;
         }
         free(exec_stream->name);
 
@@ -676,7 +655,7 @@ parsec_level_zero_memory_reserve( parsec_device_level_zero_module_t* level_zero_
             total_size = (size_t)((int)(.9*initial_free_mem / eltsize)) * eltsize;
             mem_elem_per_gpu = total_size / eltsize;
         }
-        status = zeMemAllocDevice(level_zero_device->ze_context, &memAllocDesc, total_size, alignment,
+        status = zeMemAllocDevice(level_zero_device->driver->ze_context, &memAllocDesc, total_size, alignment,
                                   level_zero_device->ze_device, &base_ptr);
         PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeMemAllocDevice ", status,
                                  ({ parsec_warning("GPU[%s] Allocating %zu bytes of memory on the GPU device failed",
@@ -795,7 +774,7 @@ parsec_level_zero_memory_release( parsec_device_level_zero_module_t* level_zero_
 #if !defined(PARSEC_GPU_LEVEL_ZERO_ALLOC_PER_TILE)
     assert( NULL != level_zero_device->super.memory );
     void* ptr = zone_malloc_fini(&level_zero_device->super.memory);
-    status = zeMemFree(level_zero_device->ze_context, ptr);
+    status = zeMemFree(level_zero_device->driver->ze_context, ptr);
     PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeMemFree ", status,
                              { parsec_warning("Failed to free the GPU backend memory."); } );
 #endif
