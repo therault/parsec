@@ -248,6 +248,7 @@ int parsec_level_zero_module_init( int dev_id, parsec_device_level_zero_driver_t
                                                  &level_zero_stream->level_zero_cl);
             PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListCreateImmediate ", ze_rc,
                                            {goto release_device;} );
+	    level_zero_stream->level_zero_cq = NULL;
         } else {
             commandQueueDesc.ordinal = computeQueueGroupOrdinal;
             ze_rc = zeCommandQueueCreate(level_zero_device->driver->ze_context, level_zero_device->ze_device,

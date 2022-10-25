@@ -211,15 +211,16 @@ static int device_level_zero_component_query(mca_base_module_t **module, int *pr
                 devices[j++] = mod2->swd;
             }
         }
-        free(devices);
         parsec_sycl_wrapper_platform_add_context(module->driver->swp, module->driver->ze_context, devices, nbdev);
+	free(devices);
         for(int i = 0, j = 0; j < nbdev; i++) {
             parsec_device_level_zero_module_t *mod2 = (parsec_device_level_zero_module_t *)parsec_device_level_zero_component.modules[did+i];
             if( mod2->driver == module->driver ) {
                 j++;
-                for(int s = 0; s < mod2->super.num_exec_streams; s++) {
+                for(int s = 0; s < mod2->super.max_exec_streams; s++) {
                     parsec_level_zero_exec_stream_t *exec_stream = (parsec_level_zero_exec_stream_t *)mod2->super.exec_stream[s];
-                    exec_stream->swq = parsec_sycl_wrapper_queue_create(module->driver->swp, mod2->swd, exec_stream->level_zero_cq);
+		    if(NULL != exec_stream->level_zero_cq)
+                      exec_stream->swq = parsec_sycl_wrapper_queue_create(module->driver->swp, mod2->swd, exec_stream->level_zero_cq);
                 }
             }
         }
