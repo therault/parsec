@@ -470,12 +470,12 @@ parsec_level_zero_module_fini(parsec_device_module_t* device)
         ze_result_t ze_rc;
         ze_rc = zeCommandListDestroy(level_zero_stream->level_zero_cl);
         PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListDestroy ", ze_rc, {} );
-        ze_rc = zeCommandQueueDestroy(level_zero_stream->level_zero_cq);
-        PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandQueueDestroy ", ze_rc, {} );
-        free(exec_stream->name);
-
-        parsec_sycl_wrapper_queue_destroy(level_zero_stream->swq);
+        /* Deleting the sycl queue wrapper and/or the command queue conflicts with the
+         *   cleaning procedure of the Level Zero runtime... Didn't find a way to do it
+         *   cleanly. Don't cleanup for now... */
+        //parsec_sycl_wrapper_queue_destroy(level_zero_stream->swq);
         level_zero_stream->swq = NULL;
+        free(exec_stream->name);
 
         /* Release Info object array */
         PARSEC_OBJ_DESTRUCT(&exec_stream->infos);
