@@ -251,6 +251,13 @@ parsec_taskpool_t* testing_nvlink_New( parsec_context_t *ctx, int depth, int mb 
             ze_event_handle_t copySignalEvent = level_zero_stream->events[0];
             status = zeCommandListAppendMemoryCopy(level_zero_stream->level_zero_cl, gpu_copy->device_private, cpu_copy->device_private, dta->nb_elts, copySignalEvent, 0, NULL);
             PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListAppendMemoryCopy ", status, { return NULL; } );
+            status = zeCommandListClose(level_zero_stream->level_zero_cl);
+	    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListClose ", status, { return NULL; } );
+            status = zeCommandQueueExecuteCommandLists(level_zero_stream->level_zero_cq, 1, &level_zero_stream->level_zero_cl, NULL);
+	    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandQueueExecuteCommandLists ", status, { return NULL; } );
+            status = zeCommandListReset(level_zero_stream->level_zero_cl);
+	    PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListReset ", status, { return NULL; } );
+
             while(1) {
                 status = zeEventQueryStatus(copySignalEvent);
                 if(status == ZE_RESULT_SUCCESS)

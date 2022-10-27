@@ -241,7 +241,7 @@ int parsec_level_zero_module_init( int dev_id, parsec_device_level_zero_driver_t
                 ZE_COMMAND_QUEUE_MODE_DEFAULT,
                 ZE_COMMAND_QUEUE_PRIORITY_NORMAL
         };
-        if( j < 2 ) {
+        if( 0 && j < 2 ) {
             commandQueueDesc.ordinal = copyQueueGroupOrdinal;
             ze_rc = zeCommandListCreateImmediate(level_zero_device->driver->ze_context, level_zero_device->ze_device,
                                                  &commandQueueDesc,
@@ -1988,7 +1988,7 @@ progress_stream( parsec_device_gpu_module_t* gpu_device,
      */
     rc = zeCommandListAppendSignalEvent( level_zero_stream->level_zero_cl, level_zero_stream->events[stream->start] );
     assert(ZE_RESULT_SUCCESS == rc);
-    if( stream->start >= 2 ) {
+    if( 1 || stream->start >= 2 ) {
         ze_result_t ze_rc = zeCommandListClose(level_zero_stream->level_zero_cl);
         PARSEC_LEVEL_ZERO_CHECK_ERROR( "zeCommandListClose ", ze_rc,
                                        { } );
