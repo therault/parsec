@@ -62,9 +62,10 @@ struct parsec_profiling_stream_s {
 };
 
 typedef struct {
-    char *name;
-    int   type;
-    int   id;
+    char  *name;
+    int    type;
+    int    id;
+    size_t bytes;
 } parsec_profiling_attribute_t;
 
 typedef struct {
@@ -110,18 +111,19 @@ static int  thread_profiling_id = 0;
 typedef struct {
     char *type_name;
     OTF2_Type type_desc;
+    size_t type_size;
 } otf2_convertor_t;
 static otf2_convertor_t otf2_convertor[] = {
-    { "uint8_t", OTF2_TYPE_UINT8 },
-    { "uint16_t", OTF2_TYPE_UINT16 },
-    { "uint32_t", OTF2_TYPE_UINT32 },
-    { "uint64_t", OTF2_TYPE_UINT64 },
-    { "int8_t", OTF2_TYPE_INT8 },
-    { "int16_t", OTF2_TYPE_INT16 },
-    { "int32_t", OTF2_TYPE_INT32 },
-    { "int64_t", OTF2_TYPE_INT64 },
-    { "float", OTF2_TYPE_FLOAT },
-    { "double", OTF2_TYPE_DOUBLE },
+    { "uint8_t", OTF2_TYPE_UINT8, sizeof(uint8_t) },
+    { "uint16_t", OTF2_TYPE_UINT16, sizeof(uint16_t) },
+    { "uint32_t", OTF2_TYPE_UINT32, sizeof(uint32_t) },
+    { "uint64_t", OTF2_TYPE_UINT64, sizeof(uint64_t) },
+    { "int8_t", OTF2_TYPE_INT8, sizeof(int8_t) },
+    { "int16_t", OTF2_TYPE_INT16, sizeof(int16_t) },
+    { "int32_t", OTF2_TYPE_INT32, sizeof(int32_t) },
+    { "int64_t", OTF2_TYPE_INT64, sizeof(int64_t) },
+    { "float", OTF2_TYPE_FLOAT, sizeof(float) },
+    { "double", OTF2_TYPE_DOUBLE, sizeof(double) },
 };
 static int nb_native_otf2_types = (int)sizeof(otf2_convertor)/sizeof(otf2_convertor_t);
 
@@ -601,9 +603,11 @@ int parsec_profiling_add_dictionary_keyword( const char* key_name, const char* a
         *c++ = '\0'; /* Overwrite '}' into a '\0' so type is terminated */
 
         OTF2_Type otf2_type = 0;
+        size_t otf2_bytes = 0;
         for(t = 0; t < nb_native_otf2_types; t++) {
             if( strcmp(type, otf2_convertor[t].type_name) == 0 ) {
                 otf2_type = otf2_convertor[t].type_desc;
+                otf2_bytes = otf2_convertor[t].type_size;
                 break;
             }
         }
@@ -624,6 +628,7 @@ int parsec_profiling_add_dictionary_keyword( const char* key_name, const char* a
                             regions[region].attr_info[regions[region].otf2_nb_attributes].type = otf2_type;
                             regions[region].attr_info[regions[region].otf2_nb_attributes].name = strdup(regions[r].name);
                             regions[region].attr_info[regions[region].otf2_nb_attributes].id   = regions[r].attr_info[i].id;
+                            regions[region].attr_info[regions[region].otf2_nb_attributes].bytes= otf2_bytes;
                             attr_found = true;
                         }
                         break;
@@ -637,6 +642,7 @@ int parsec_profiling_add_dictionary_keyword( const char* key_name, const char* a
                 regions[region].attr_info[regions[region].otf2_nb_attributes].type = otf2_type;
                 regions[region].attr_info[regions[region].otf2_nb_attributes].name = strdup(name);
                 regions[region].attr_info[regions[region].otf2_nb_attributes].id   = next_attr_id++;
+                regions[region].attr_info[regions[region].otf2_nb_attributes].bytes= otf2_bytes;
 
                 if( NULL != global_def_writer ) {
                     strid = next_otf2_global_strid();
@@ -660,10 +666,12 @@ int parsec_profiling_add_dictionary_keyword( const char* key_name, const char* a
             if( strncmp(type, "char[", 5) == 0 ) {
                 /* We don't support fixed-size strings yet, so we just remember to skip the bytes */
                 int nb = atoi(&type[5]);
-                regions[region].attr_info[regions[region].otf2_nb_attributes].type = -nb;
+                regions[region].attr_info[regions[region].otf2_nb_attributes].bytes = nb;
+                regions[region].attr_info[regions[region].otf2_nb_attributes].type  = OTF2_TYPE_STRING;
             } else {
                 parsec_warning("PaRSEC Profiling System: OTF2 Error -- Unrecognized type '%s' -- type size must be specified e.g. int32_t", type);
                 regions[region].attr_info[regions[region].otf2_nb_attributes].type = 0;
+                regions[region].attr_info[regions[region].otf2_nb_attributes].bytes = 0;
             }
         }
         regions[region].otf2_nb_attributes++;
@@ -809,6 +817,16 @@ parsec_profiling_trace_flags_info_fn(parsec_profiling_stream_t* context, int key
                     rc = OTF2_AttributeList_AddDouble(attribute_list, regions[region].attr_info[t].id, *(double*)ptr);
                     ptr += sizeof(double);
                     break;
+                case OTF2_TYPE_STRING:
+                    {
+                        int strid = next_otf2_global_strid();
+                        char str[regions[region].attr_info[t].bytes+1];
+                        strncpy(str, (char*)ptr, regions[region].attr_info[t].bytes);
+                        rc = OTF2_GlobalDefWriter_WriteString(global_def_writer, strid, str);
+                        rc = OTF2_AttributeList_AddStringRef(attribute_list, regions[region].attr_info[t].id, strid);
+                        ptr += regions[region].attr_info[t].bytes;
+                        break;
+                    }
                 default:
                     parsec_warning("PaRSEC Profiling System: internal error, type %d unkown", regions[region].attr_info[t].type);
                     break;
@@ -896,7 +914,7 @@ int parsec_profiling_dbp_dump( void )
             parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
         }
     }
-    assert(thread_profiling_id == nb_local_threads);
+    assert(thread_profiling_id == (int)nb_local_threads);
     parsec_list_unlock( &threads );
 
 
