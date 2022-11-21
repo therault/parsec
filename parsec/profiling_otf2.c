@@ -664,10 +664,30 @@ int parsec_profiling_add_dictionary_keyword( const char* key_name, const char* a
             }
         } else {
             if( strncmp(type, "char[", 5) == 0 ) {
-                /* We don't support fixed-size strings yet, so we just remember to skip the bytes */
                 int nb = atoi(&type[5]);
                 regions[region].attr_info[regions[region].otf2_nb_attributes].bytes = nb;
                 regions[region].attr_info[regions[region].otf2_nb_attributes].type  = OTF2_TYPE_STRING;
+                regions[region].attr_info[regions[region].otf2_nb_attributes].name = strdup(name);
+                regions[region].attr_info[regions[region].otf2_nb_attributes].id   = next_attr_id++;
+                
+                if( NULL != global_def_writer ) {
+                    strid = next_otf2_global_strid();
+                    rc = OTF2_GlobalDefWriter_WriteString(global_def_writer,
+                                                          strid,
+                                                          name);
+                    if(rc != OTF2_SUCCESS) {
+                        parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
+                    }
+                    rc = OTF2_GlobalDefWriter_WriteAttribute(global_def_writer,
+                                                             regions[region].attr_info[regions[region].otf2_nb_attributes].id,
+                                                             strid,
+                                                             emptystrid,
+                                                             otf2_convertor[t].type_desc);
+                    if(rc != OTF2_SUCCESS) {
+                        parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
+                    }
+                }
+
             } else {
                 parsec_warning("PaRSEC Profiling System: OTF2 Error -- Unrecognized type '%s' -- type size must be specified e.g. int32_t", type);
                 regions[region].attr_info[regions[region].otf2_nb_attributes].type = 0;
@@ -820,7 +840,8 @@ parsec_profiling_trace_flags_info_fn(parsec_profiling_stream_t* context, int key
                 case OTF2_TYPE_STRING:
                     {
                         int strid = next_otf2_global_strid();
-                        char str[regions[region].attr_info[t].bytes+1];
+                        char *str = alloca(regions[region].attr_info[t].bytes+1);
+                        str[regions[region].attr_info[t].bytes] = '\0';
                         strncpy(str, (char*)ptr, regions[region].attr_info[t].bytes);
                         rc = OTF2_GlobalDefWriter_WriteString(global_def_writer, strid, str);
                         rc = OTF2_AttributeList_AddStringRef(attribute_list, regions[region].attr_info[t].id, strid);
