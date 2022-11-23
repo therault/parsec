@@ -661,7 +661,7 @@ int parsec_profiling_add_dictionary_keyword( const char* key_name, const char* a
                                                              regions[region].attr_info[regions[region].otf2_nb_attributes].id,
                                                              strid,
                                                              emptystrid,
-                                                             otf2_convertor[t].type_desc);
+                                                             OTF2_TYPE_STRING);
                     if(rc != OTF2_SUCCESS) {
                         parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
                     }
