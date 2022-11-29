@@ -611,6 +611,11 @@ int parsec_profiling_add_dictionary_keyword( const char* key_name, const char* a
                 break;
             }
         }
+        if((t == nb_native_otf2_types) && (strncmp(type, "char[", 5) == 0)) {
+            otf2_type = OTF2_TYPE_STRING;
+            otf2_bytes = atoi(&type[5]);
+            t = -1;
+        }
 
         bool attr_found = false;
         if (t < nb_native_otf2_types) {
@@ -620,7 +625,7 @@ int parsec_profiling_add_dictionary_keyword( const char* key_name, const char* a
             for (int r = REGION_ID_OFFSET; r < next_region; ++r) {
                 for (int i = 0; i < regions[r].otf2_nb_attributes; ++i) {
                     if (0 == strcmp(regions[r].attr_info[i].name, name)) {
-                        if (otf2_type != regions[r].attr_info[i].type) {
+                        if (otf2_type != regions[r].attr_info[i].type || otf2_bytes != regions[r].attr_info[i].bytes) {
                             parsec_warning("parsec_profiling: found different types for attribute %s in dictionary entries %s and %s\n"
                                            "Your trace might not be visualized correctly in some tools",
                                            name, regions[region].name, regions[r].name);
@@ -628,7 +633,7 @@ int parsec_profiling_add_dictionary_keyword( const char* key_name, const char* a
                             regions[region].attr_info[regions[region].otf2_nb_attributes].type = otf2_type;
                             regions[region].attr_info[regions[region].otf2_nb_attributes].name = strdup(regions[r].name);
                             regions[region].attr_info[regions[region].otf2_nb_attributes].id   = regions[r].attr_info[i].id;
-                            regions[region].attr_info[regions[region].otf2_nb_attributes].bytes= otf2_bytes;
+                            regions[region].attr_info[regions[region].otf2_nb_attributes].bytes= regions[r].attr_info[i].bytes;
                             attr_found = true;
                         }
                         break;
@@ -663,36 +668,9 @@ int parsec_profiling_add_dictionary_keyword( const char* key_name, const char* a
                 }
             }
         } else {
-            if( strncmp(type, "char[", 5) == 0 ) {
-                int nb = atoi(&type[5]);
-                regions[region].attr_info[regions[region].otf2_nb_attributes].bytes = nb;
-                regions[region].attr_info[regions[region].otf2_nb_attributes].type  = OTF2_TYPE_STRING;
-                regions[region].attr_info[regions[region].otf2_nb_attributes].name = strdup(name);
-                regions[region].attr_info[regions[region].otf2_nb_attributes].id   = next_attr_id++;
-                
-                if( NULL != global_def_writer ) {
-                    strid = next_otf2_global_strid();
-                    rc = OTF2_GlobalDefWriter_WriteString(global_def_writer,
-                                                          strid,
-                                                          name);
-                    if(rc != OTF2_SUCCESS) {
-                        parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
-                    }
-                    rc = OTF2_GlobalDefWriter_WriteAttribute(global_def_writer,
-                                                             regions[region].attr_info[regions[region].otf2_nb_attributes].id,
-                                                             strid,
-                                                             emptystrid,
-                                                             otf2_convertor[t].type_desc);
-                    if(rc != OTF2_SUCCESS) {
-                        parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
-                    }
-                }
-
-            } else {
-                parsec_warning("PaRSEC Profiling System: OTF2 Error -- Unrecognized type '%s' -- type size must be specified e.g. int32_t", type);
-                regions[region].attr_info[regions[region].otf2_nb_attributes].type = 0;
-                regions[region].attr_info[regions[region].otf2_nb_attributes].bytes = 0;
-            }
+            parsec_warning("PaRSEC Profiling System: OTF2 Error -- Unrecognized type '%s' -- type size must be specified e.g. int32_t", type);
+            regions[region].attr_info[regions[region].otf2_nb_attributes].type = 0;
+            regions[region].attr_info[regions[region].otf2_nb_attributes].bytes = 0;
         }
         regions[region].otf2_nb_attributes++;
         if(*c == '\0')
