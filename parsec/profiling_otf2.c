@@ -58,6 +58,7 @@ struct parsec_profiling_stream_s {
     parsec_list_item_t super;
     parsec_list_t      informations;
     OTF2_EvtWriter    *evt_writer;
+    OTF2_DefWriter    *def_writer;
     parsec_profiling_stream_data_t data;
 };
 
@@ -310,6 +311,7 @@ parsec_profiling_stream_t* parsec_profiling_stream_init( size_t length, const ch
     res->data.id = parsec_atomic_fetch_inc_int32(&thread_profiling_id);
     res->data.nb_evt = 0;
     res->evt_writer = NULL;
+    res->def_writer = NULL;
 
     if (res->data.id >= max_stream_id) {
         parsec_warning("More than %d profiling streams allocated, trace may become inconsistent!\n",
@@ -328,6 +330,10 @@ parsec_profiling_stream_t* parsec_profiling_stream_init( size_t length, const ch
         res->evt_writer = OTF2_Archive_GetEvtWriter( otf2_archive, res->data.id );
         if( NULL == res->evt_writer ) {
             parsec_warning("PaRSEC Profiling -- OTF2: could not allocate event writer for location %d\n", res->data.id);
+        }
+        res->def_writer = OTF2_Archive_GetDefWriter( otf2_archive, res->data.id );
+        if( NULL == res->def_writer ) {
+            parsec_warning("PaRSEC Profiling -- OTF2: could not allocate definition writer for location %d\n", res->data.id);
         }
     }
 
@@ -485,6 +491,10 @@ void parsec_profiling_start(void)
         tp->evt_writer = OTF2_Archive_GetEvtWriter( otf2_archive, tp->data.id );
         if( NULL == tp->evt_writer ) {
             parsec_warning("PaRSEC Profiling -- OTF2: could not allocate event writer for location %d\n", tp->data.id);
+        }
+        tp->def_writer = OTF2_Archive_GetDefWriter( otf2_archive, tp->data.id );
+        if( NULL == tp->def_writer ) {
+            parsec_warning("PaRSEC Profiling -- OTF2: could not allocate definition writer for location %d\n", tp->data.id);
         }
     }
     parsec_list_unlock( &threads );
@@ -733,8 +743,6 @@ parsec_profiling_trace_flags(parsec_profiling_stream_t* context, int key,
     return parsec_profiling_trace_flags_info_fn(context, key, event_id, taskpool_id, memcpy, info, flags);
 }
 
-static pthread_mutex_t parsec_otf2_global_writer_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 int
 parsec_profiling_trace_flags_info_fn(parsec_profiling_stream_t* context, int key,
                                      uint64_t event_id, uint32_t taskpool_id,
@@ -819,14 +827,14 @@ parsec_profiling_trace_flags_info_fn(parsec_profiling_stream_t* context, int key
                     break;
                 case OTF2_TYPE_STRING:
                     {
-                        int strid = next_otf2_global_strid();
-                        char *str = alloca(regions[region].attr_info[t].bytes+1);
-                        str[regions[region].attr_info[t].bytes] = '\0';
-                        strncpy(str, (char*)ptr, regions[region].attr_info[t].bytes);
-                        pthread_mutex_lock(&parsec_otf2_global_writer_mutex);
-                        rc = OTF2_GlobalDefWriter_WriteString(global_def_writer, strid, str);
-                        pthread_mutex_unlock(&parsec_otf2_global_writer_mutex);
-                        rc = OTF2_AttributeList_AddStringRef(attribute_list, regions[region].attr_info[t].id, strid);
+                        if(NULL != context->def_writer) {
+                            int strid = next_otf2_global_strid();
+                            char *str = alloca(regions[region].attr_info[t].bytes+1);
+                            str[regions[region].attr_info[t].bytes] = '\0';
+                            strncpy(str, (char*)ptr, regions[region].attr_info[t].bytes);
+                            rc = OTF2_DefWriter_WriteString(context->def_writer, strid, str);
+                            rc = OTF2_AttributeList_AddStringRef(attribute_list, regions[region].attr_info[t].id, strid);
+                        }
                         ptr += regions[region].attr_info[t].bytes;
                         break;
                     }
@@ -899,6 +907,10 @@ int parsec_profiling_dbp_dump( void )
          r = PARSEC_LIST_ITERATOR_NEXT(r) ) {
         parsec_profiling_stream_t *tp = (parsec_profiling_stream_t*)r;
         rc = OTF2_Archive_CloseEvtWriter( otf2_archive, tp->evt_writer );
+        if(rc != OTF2_SUCCESS) {
+            parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
+        }
+        rc = OTF2_Archive_CloseDefWriter( otf2_archive, tp->def_writer );
         if(rc != OTF2_SUCCESS) {
             parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
         }
