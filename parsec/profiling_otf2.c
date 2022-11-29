@@ -733,6 +733,8 @@ parsec_profiling_trace_flags(parsec_profiling_stream_t* context, int key,
     return parsec_profiling_trace_flags_info_fn(context, key, event_id, taskpool_id, memcpy, info, flags);
 }
 
+static pthread_mutex_t parsec_otf2_global_writer_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 int
 parsec_profiling_trace_flags_info_fn(parsec_profiling_stream_t* context, int key,
                                      uint64_t event_id, uint32_t taskpool_id,
@@ -821,7 +823,9 @@ parsec_profiling_trace_flags_info_fn(parsec_profiling_stream_t* context, int key
                         char *str = alloca(regions[region].attr_info[t].bytes+1);
                         str[regions[region].attr_info[t].bytes] = '\0';
                         strncpy(str, (char*)ptr, regions[region].attr_info[t].bytes);
+                        pthread_mutex_lock(&parsec_otf2_global_writer_mutex);
                         rc = OTF2_GlobalDefWriter_WriteString(global_def_writer, strid, str);
+                        pthread_mutex_unlock(&parsec_otf2_global_writer_mutex);
                         rc = OTF2_AttributeList_AddStringRef(attribute_list, regions[region].attr_info[t].id, strid);
                         ptr += regions[region].attr_info[t].bytes;
                         break;
