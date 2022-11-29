@@ -73,7 +73,7 @@ void mca_components_free_user_list(char **list)
 
 char *mca_components_list_compiled(char* type_name)
 {
-    int i, len=0, prn=0;
+    int i, len=2, prn=0;
     char *components_string;
 
     for(i = 0; mca_static_components[i] != NULL; i++) {
@@ -84,6 +84,7 @@ char *mca_components_list_compiled(char* type_name)
              + 2;
     }
     components_string = (char*)malloc(sizeof(char)*len);
+    components_string[0] = '\0';
     char *prs = components_string;
     for(i = 0; mca_static_components[i] != NULL; i++) {
         if( strcmp( mca_static_components[i]->mca_type_name, type_name ) ) continue;
