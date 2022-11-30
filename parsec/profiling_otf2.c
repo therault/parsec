@@ -439,6 +439,10 @@ int parsec_profiling_dbp_start( const char *_basefile, const char *hr_info )
         OTF2_Archive_Close(otf2_archive);
         return PARSEC_ERROR;
     }
+    rc = OTF2_Archive_OpenDefFiles( otf2_archive );
+    if( OTF2_SUCCESS != rc ) {
+        parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
+    }
 
     if( process_id == 0 ) {
         global_def_writer = OTF2_Archive_GetGlobalDefWriter( otf2_archive );
@@ -833,7 +837,13 @@ parsec_profiling_trace_flags_info_fn(parsec_profiling_stream_t* context, int key
                             str[regions[region].attr_info[t].bytes] = '\0';
                             strncpy(str, (char*)ptr, regions[region].attr_info[t].bytes);
                             rc = OTF2_DefWriter_WriteString(context->def_writer, strid, str);
+                            if( rc != OTF2_SUCCESS) {
+                                parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
+                            }
                             rc = OTF2_AttributeList_AddStringRef(attribute_list, regions[region].attr_info[t].id, strid);
+                            if( rc != OTF2_SUCCESS) {
+                                parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
+                            }
                         }
                         ptr += regions[region].attr_info[t].bytes;
                         break;
@@ -918,20 +928,18 @@ int parsec_profiling_dbp_dump( void )
         stream_data[nb_local_threads] = tp->data;
 
         nb_local_threads++;
-
-        /* create a def file for this location */
-        OTF2_DefWriter *def_writer = OTF2_Archive_GetDefWriter( otf2_archive, tp->data.id );
-        if(NULL == def_writer ) {
-            parsec_warning("PaRSEC Profiling System: OTF2 Error -- could not open def_writer for location %d", tp->data.id);
-        }
-        rc = OTF2_Archive_CloseDefWriter( otf2_archive, def_writer );
-        if(rc != OTF2_SUCCESS) {
-            parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
-        }
     }
     assert(thread_profiling_id == (int)nb_local_threads);
     parsec_list_unlock( &threads );
 
+    rc = OTF2_Archive_CloseDefFiles( otf2_archive );
+    if(rc != OTF2_SUCCESS) {
+        parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
+    }
+    rc = OTF2_Archive_CloseEvtFiles( otf2_archive );
+    if(rc != OTF2_SUCCESS) {
+        parsec_warning("PaRSEC Profiling System: OTF2 Error -- %s (%s)", OTF2_Error_GetName(rc), OTF2_Error_GetDescription(rc));
+    }
 
     if( parsec_profiling_mpi_on ) {
         MPI_Comm_size(parsec_otf2_profiling_comm, &comm_size);
