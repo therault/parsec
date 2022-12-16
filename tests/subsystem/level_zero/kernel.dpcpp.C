@@ -18,7 +18,7 @@ int dpcpp_kernel_GEMM(sycl_wrapper_driver_t *swp,
                       double *C,
                       int mb)
 {
-    double alpha=0.0;
+    double alpha=1.0;
     double beta=1.0;
 /*    sycl::backend_input_t<sycl::backend::ext_oneapi_level_zero, sycl::buffer<double, 1>> hBufferInteropInputA = { (void*)A, sycl::ext::oneapi::level_zero::ownership::keep };
     sycl::buffer<double, 1> bA = sycl::make_buffer<sycl::backend::ext_oneapi_level_zero, double, 1>(hBufferInteropInputA, swp->context);
