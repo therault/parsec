@@ -19,8 +19,7 @@ struct device_s;
 struct stream_s;
 
 #define NB_STREAMS 4
-#define MAX_EVENTS 2
-#define N 8192
+#define MAX_FENCES 2
 
 typedef struct stream_s {
     int                       immediate;
@@ -28,14 +27,13 @@ typedef struct stream_s {
     ze_command_queue_handle_t cq;
     ze_command_list_handle_t  cl;
     struct device_s          *device;
-    ze_event_handle_t         events[MAX_EVENTS];
+    ze_fence_handle_t         fences[MAX_FENCES];
 } stream_t;
 
 typedef struct device_s {
     ze_device_handle_t       device;
     struct driver_s         *driver;
     sycl_wrapper_device_t   *swd;
-    ze_event_pool_handle_t   eventPool;
     stream_t                 streams[NB_STREAMS];
 } device_t;
 
@@ -99,17 +97,6 @@ static int init_device(device_t *device, ze_device_handle_t gpuDevice)
     }
     fprintf(stderr, "INFO: computeQueueGroupOrdinal = %d, copyQueueGroupOrdinal = %d\n", computeQueueGroupOrdinal, copyQueueGroupOrdinal);
 
-    // Create event pool
-    ze_event_pool_desc_t eventPoolDesc = {
-            ZE_STRUCTURE_TYPE_EVENT_POOL_DESC,
-            NULL,
-            ZE_EVENT_POOL_FLAG_HOST_VISIBLE, // all events in pool are visible to Host
-            1 // count
-    };
-    ze_rc = zeEventPoolCreate(device->driver->context, &eventPoolDesc, 0, NULL, 
-                              &device->eventPool);
-    LEVEL_ZERO_CHECK_ERROR( "zeEventPoolCreate ", ze_rc, {return -1;} );
-
     for(int j = 0; j < NB_STREAMS; j++ ) {
         ze_command_queue_desc_t commandQueueDesc = {
             ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC,
@@ -142,17 +129,15 @@ static int init_device(device_t *device, ze_device_handle_t gpuDevice)
             LEVEL_ZERO_CHECK_ERROR( "zeCommandListCreate ", ze_rc, { return -1;} );
         }
 
-        for(int k = 0; k < MAX_EVENTS; k++ ) {
-            ze_event_desc_t eventDesc = {
-                    ZE_STRUCTURE_TYPE_EVENT_DESC,
-                    NULL,
-                    0, // index
-                    0, // no additional memory/cache coherency required on signal
-                    ZE_EVENT_SCOPE_FLAG_HOST  // ensure memory coherency across device and Host after event completes
+        for(int k = 0; k < MAX_FENCES; k++ ) {
+            ze_fence_desc_t fence_desc = {
+                .stype = ZE_STRUCTURE_TYPE_FENCE_DESC,
+                .pNext = NULL,
+                .flags = 0
             };
-            device->streams[j].events[k]   = NULL;
-            ze_rc = zeEventCreate(device->eventPool, &eventDesc, &(device->streams[j].events[k]));
-            LEVEL_ZERO_CHECK_ERROR( "zeEventCreate ", ze_rc, {return -1;} );
+            device->streams[j].fences[k]   = NULL;
+            ze_rc = zeFenceCreate(device->streams[j].cq, &fence_desc, &(device->streams[j].fences[k]));
+            LEVEL_ZERO_CHECK_ERROR( "zeFenceCreate ", ze_rc, { continue; } );
         }
     }
     device->device = gpuDevice;
@@ -296,25 +281,33 @@ static void *allocate_workspace(device_t *device, size_t size)
     return device_ptr;
 }
 
-#define TIME_START                 0
-#define TIME_START_ALLOC           1
-#define TIME_END_ALLOC             2
-#define TIME_START_CPU2GPU         3
-#define TIME_ENTER_WAIT_CPU2GPU    4
-#define TIME_END_CPU2GPU           5
-#define TIME_START_GPU2CPU         6
-#define TIME_ENTER_WAIT_GPU2CPU    7
-#define TIME_END_GPU2CPU           8
-#define TIME_START_KERNEL(i)       (9+3*(i))
-#define TIME_ENTER_WAIT_KERNEL(i)  (10+3*(i))
-#define TIME_END_KERNEL(i)         (11+3*(i))
-#define NB_TIME_EVENTS(nruns)      (10+3*(nruns))
+typedef struct {
+    struct timespec start;
+    struct timespec enter_wait;
+    struct timespec end; 
+} run_timing_t;
 
-#define NRUNS 3
+typedef struct {
+    struct timespec start;
+    struct timespec start_alloc;
+    struct timespec end_alloc;
+    struct timespec start_cpu2gpu;
+    struct timespec enter_wait_cpu2gpu;
+    struct timespec end_cpu2gpu;
+    struct timespec start_gpu2cpu;
+    struct timespec enter_wait_gpu2cpu;
+    struct timespec end_gpu2cpu;
+    run_timing_t   *runs;
+} device_timing_t;
 
 double diff_timespec(const struct timespec *time1, const struct timespec *time0) {
   return (time1->tv_sec - time0->tv_sec)
       + (time1->tv_nsec - time0->tv_nsec) / 1000000000.0;
+}
+
+static void usage(const char *name) {
+    fprintf(stderr, "USAGE: %s [<nunber of Level Zero GPUs>] [Problem size] [Number of iterations]\n", name);
+    exit(EXIT_FAILURE);
 }
 
 int main(int argc, char *argv[]) 
@@ -326,13 +319,28 @@ int main(int argc, char *argv[])
     int max_devices = 1024*1024, nb_devices = 0;
     void **device_workspaceA, **device_workspaceC;
     int errors = 0;
-    struct timespec *times;
+    int N = 4096;
+    int NRUNS = 3;
+    device_timing_t *timings;
 
     if(argc > 1) {
         max_devices = atoi(argv[1]);
         if(max_devices <= 0) {
-            fprintf(stderr, "USAGE: %s [<nunber of Level Zero GPUs>]\n", argv[0]);
-            return EXIT_FAILURE;
+            usage(argv[0]);
+        }
+
+        if(argc > 2) {
+            N = atoi(argv[2]);
+            if(N <= 0) {
+                usage(argv[0]);
+            }
+
+            if(argc >3) {
+                NRUNS = atoi(argv[3]);
+                if(NRUNS <= 0) {
+                    usage(argv[0]);
+                }
+            }
         }
     }
 
@@ -354,16 +362,19 @@ int main(int argc, char *argv[])
             fprintf(stderr, "%d device found in driver %d... Bailing out\n", nb_devices, driverId);
             return 1;
         } else {
-	    fprintf(stderr, "STATUS: there are %d GPU devices in driver %d\n", nb, driverId);
+	        fprintf(stderr, "STATUS: there are %d GPU devices in driver %d\n", nb, driverId);
             nb_devices += nb;
+            nb_devices = nb_devices <= max_devices ? nb_devices : max_devices;
         }
     }
     free(allDrivers);
     fprintf(stderr, "%d devices found and initialized\n", nb_devices);
 
-    times = (struct timespec *)calloc(sizeof(struct timespec), NB_TIME_EVENTS(NRUNS));
-    for(int i = 0; i < nb_devices; i++)
-        clock_gettime(CLOCK_REALTIME, &times[TIME_START*nb_devices+i]);
+    timings = (device_timing_t*)calloc(sizeof(device_timing_t), nb_devices);
+    for(int i = 0; i < nb_devices; i++) {
+        clock_gettime(CLOCK_REALTIME, &timings[i].start);
+        timings[i].runs = (run_timing_t*)calloc(sizeof(run_timing_t), NRUNS);
+    }
 
     //Allocate GPU memory for each device
     device_workspaceA = (void**)malloc(sizeof(void*)*nb_devices);
@@ -371,10 +382,10 @@ int main(int argc, char *argv[])
     int did = 0;
     for(int driverId = 0; driverId < (int)driverCount; driverId++) {
         for(int deviceId = 0; deviceId < drivers[driverId].nb_devices; deviceId++) {
-            clock_gettime(CLOCK_REALTIME, &times[TIME_START_ALLOC*nb_devices+did]);
+            clock_gettime(CLOCK_REALTIME, &timings[did].start_alloc);
             device_workspaceA[did] = allocate_workspace(&drivers[driverId].devices[deviceId], sizeof(double)*N*N*2);
             device_workspaceC[did] = allocate_workspace(&drivers[driverId].devices[deviceId], sizeof(double)*N*N);
-            clock_gettime(CLOCK_REALTIME, &times[TIME_END_ALLOC*nb_devices+did]);
+            clock_gettime(CLOCK_REALTIME, &timings[did].end_alloc);
             did++;
         }
     }
@@ -394,7 +405,9 @@ int main(int argc, char *argv[])
                 void *copy_in = (void*)cpuA;
                 void *copy_out = (void*)device_workspaceA[did];
                 size_t count = N*N*sizeof(double);
-                clock_gettime(CLOCK_REALTIME, &times[TIME_START_CPU2GPU*nb_devices+did]);
+                clock_gettime(CLOCK_REALTIME, &timings[did].start_cpu2gpu);
+                ze_rc = zeCommandListReset(device->streams[0].cl);
+                LEVEL_ZERO_CHECK_ERROR( "zeCommandListReset ", ze_rc, { continue; } );
                 ze_rc = (ze_result_t)zeCommandListAppendMemoryCopy(device->streams[0].cl, copy_out, copy_in, count, NULL, 0, NULL);
                 LEVEL_ZERO_CHECK_ERROR( "zeCommandListAppendMemoryCopy(A->GPU) ", ze_rc, { continue; } );
                 copy_in = (void*)cpuC;
@@ -403,35 +416,31 @@ int main(int argc, char *argv[])
                 ze_rc = (ze_result_t)zeCommandListAppendMemoryCopy(device->streams[0].cl, copy_out, copy_in, count, NULL, 0, NULL);
                 LEVEL_ZERO_CHECK_ERROR( "zeCommandListAppendMemoryCopy(C->GPU) ", ze_rc, { continue; } );
                 
-                ze_rc = zeCommandListAppendSignalEvent( device->streams[0].cl, device->streams[0].events[0] );
-                assert(ZE_RESULT_SUCCESS == ze_rc);
                 ze_rc = zeCommandListClose(device->streams[0].cl);
                 LEVEL_ZERO_CHECK_ERROR( "zeCommandListClose ", ze_rc, { continue; } );
-                ze_rc = zeCommandQueueExecuteCommandLists(device->streams[0].cq, 1, &device->streams[0].cl, NULL);
+                ze_rc = zeCommandQueueExecuteCommandLists(device->streams[0].cq, 1, &device->streams[0].cl, device->streams[0].fences[0]);
                 LEVEL_ZERO_CHECK_ERROR( "zeCommandQueueExecuteCommandLists ", ze_rc, { continue; } );
-                ze_rc = zeCommandListReset(device->streams[0].cl);
-                LEVEL_ZERO_CHECK_ERROR( "zeCommandListReset ", ze_rc, { continue; } );
 
-                clock_gettime(CLOCK_REALTIME, &times[TIME_ENTER_WAIT_CPU2GPU*nb_devices+did]);
+                clock_gettime(CLOCK_REALTIME, &timings[did].enter_wait_cpu2gpu);
                 do {
-                    ze_rc = zeEventQueryStatus(device->streams[0].events[0]);
+                    ze_rc = zeFenceQueryStatus(device->streams[0].fences[0]);
                     if( ZE_RESULT_SUCCESS == ze_rc ) {
                         fprintf(stderr, "STATUS: copies ended on device %d of driver %d\n", deviceId, driverId);
 			            break;
                     } else  if( ZE_RESULT_NOT_READY != ze_rc ) {
-                        LEVEL_ZERO_CHECK_ERROR( "(progress_stream) zeEventQueryStatus ", ze_rc, { continue; } );
+                        LEVEL_ZERO_CHECK_ERROR( "(progress_stream) zeFenceQueryStatus ", ze_rc, { continue; } );
                     } else {
                         usleep(10);
                     }
                 } while(1);
-                clock_gettime(CLOCK_REALTIME, &times[TIME_END_CPU2GPU*nb_devices+did]);
+                clock_gettime(CLOCK_REALTIME, &timings[did].end_cpu2gpu);
                 fprintf(stderr, "STATUS: CPU->GPU copies on device %d of driver %d completed!\n", deviceId, driverId);
             }
             did++;
         }
     }
 
-    for(int run = 0; run < 3; run++) {
+    for(int run = 0; run < NRUNS; run++) {
         //Do a GEMM (blocking) on each device, and wait for its completion -- yes, memory is not initialized.
         did = 0;
         for(int driverId = 0; driverId < (int)driverCount; driverId++) {
@@ -443,27 +452,20 @@ int main(int argc, char *argv[])
                     dpcpp_kernel_GEMM(device->driver->swp, device->swd, device->streams[2].swq, (double*)device_workspaceA[did], (double*)device_workspaceC[did], N);
                     fprintf(stderr, "STATUS: GEMM[%d] submitted on device %d of driver %d\n", run, deviceId, driverId);
 
-                    clock_gettime(CLOCK_REALTIME, &times[TIME_START_KERNEL(run)*nb_devices+did]);
-                    ze_rc = zeCommandListAppendSignalEvent( device->streams[2].cl, device->streams[2].events[0] );
-                    assert(ZE_RESULT_SUCCESS == ze_rc);
+                    clock_gettime(CLOCK_REALTIME, &timings[did].runs[run].start);
+                    ze_rc = zeCommandListReset(device->streams[2].cl);
+                    LEVEL_ZERO_CHECK_ERROR( "zeCommandListReset ", ze_rc, { continue; } );
                     ze_rc = zeCommandListClose(device->streams[2].cl);
                     LEVEL_ZERO_CHECK_ERROR( "zeCommandListClose ", ze_rc, { continue; } );
 
-                    ze_fence_desc_t fence_desc = {
-                        .stype = ZE_STRUCTURE_TYPE_FENCE_DESC,
-                        .pNext = NULL,
-                        .flags = 0
-                    };
-                    ze_fence_handle_t fence;
-                    ze_rc = zeFenceCreate(device->streams[2].cq, &fence_desc, &fence);
-                    LEVEL_ZERO_CHECK_ERROR( "zeFenceCreate ", ze_rc, { continue; } );
-                    ze_rc = zeCommandQueueExecuteCommandLists(device->streams[2].cq, 1, &device->streams[2].cl, fence);
+                    ze_rc = zeFenceReset(device->streams[2].fences[0]);
+                    LEVEL_ZERO_CHECK_ERROR( "zeFenceReset ", ze_rc, { continue; } );
+                    ze_rc = zeCommandQueueExecuteCommandLists(device->streams[2].cq, 1, &device->streams[2].cl, device->streams[2].fences[0]);
                     LEVEL_ZERO_CHECK_ERROR( "zeCommandQueueExecuteCommandLists ", ze_rc, { continue; } );
 
-                    clock_gettime(CLOCK_REALTIME, &times[TIME_ENTER_WAIT_KERNEL(run)*nb_devices+did]);
+                    clock_gettime(CLOCK_REALTIME, &timings[did].runs[run].enter_wait);
                     do {
-                        //ze_rc = zeEventQueryStatus(device->streams[2].events[0]);
-                        ze_rc = zeFenceQueryStatus(fence);
+                        ze_rc = zeFenceQueryStatus(device->streams[2].fences[0]);
                         if( ZE_RESULT_SUCCESS == ze_rc ) {
                             fprintf(stderr, "STATUS: GEMM[%d] ended on device %d of driver %d\n", run, deviceId, driverId);
                             break;
@@ -473,15 +475,8 @@ int main(int argc, char *argv[])
                             usleep(10);
                         }
                     } while(1);
-                    clock_gettime(CLOCK_REALTIME, &times[TIME_END_KERNEL(run)*nb_devices+did]);
+                    clock_gettime(CLOCK_REALTIME, &timings[did].runs[run].end);
                     fprintf(stderr, "STATUS: GEMM[%d] on device %d of driver %d completed!\n", run, deviceId, driverId);
-
-                    ze_rc = zeCommandListReset(device->streams[2].cl);
-                    LEVEL_ZERO_CHECK_ERROR( "zeCommandListReset ", ze_rc, { continue; } );
-                    ze_rc = zeEventHostReset(device->streams[2].events[0]);
-                    LEVEL_ZERO_CHECK_ERROR( "zeEventHostReset ", ze_rc, { continue; } );
-                    ze_rc = zeFenceDestroy( fence );
-                    LEVEL_ZERO_CHECK_ERROR( "zeFenceDestroy ", ze_rc, { continue; } );
                 }
                 did++;
             }
@@ -500,32 +495,32 @@ int main(int argc, char *argv[])
 
                 for(int i = 0; i < N*N; i++) cpuC[i] = -1.0;
 
-                clock_gettime(CLOCK_REALTIME, &times[TIME_START_GPU2CPU*nb_devices+did]);
+                clock_gettime(CLOCK_REALTIME, &timings[did].start_gpu2cpu);
+                ze_rc = zeCommandListReset(device->streams[1].cl);
+                LEVEL_ZERO_CHECK_ERROR( "zeCommandListReset ", ze_rc, { continue; } );
                 ze_rc = (ze_result_t)zeCommandListAppendMemoryCopy(device->streams[1].cl, copy_out, copy_in, count, NULL, 0, NULL);
                 LEVEL_ZERO_CHECK_ERROR( "zeCommandListAppendMemoryCopy(GPU->A) ", ze_rc, { continue; } );
                 
-                ze_rc = zeCommandListAppendSignalEvent( device->streams[1].cl, device->streams[1].events[0] );
-                assert(ZE_RESULT_SUCCESS == ze_rc);
                 ze_rc = zeCommandListClose(device->streams[1].cl);
                 LEVEL_ZERO_CHECK_ERROR( "zeCommandListClose ", ze_rc, { continue; } );
-                ze_rc = zeCommandQueueExecuteCommandLists(device->streams[1].cq, 1, &device->streams[1].cl, NULL);
+                ze_rc = zeFenceReset(device->streams[1].fences[0]);
+                LEVEL_ZERO_CHECK_ERROR( "zeFenceReset ", ze_rc, { continue; } );
+                ze_rc = zeCommandQueueExecuteCommandLists(device->streams[1].cq, 1, &device->streams[1].cl, device->streams[1].fences[0]);
                 LEVEL_ZERO_CHECK_ERROR( "zeCommandQueueExecuteCommandLists ", ze_rc, { continue; } );
-                ze_rc = zeCommandListReset(device->streams[1].cl);
-                LEVEL_ZERO_CHECK_ERROR( "zeCommandListReset ", ze_rc, { continue; } );
 
-                clock_gettime(CLOCK_REALTIME, &times[TIME_ENTER_WAIT_GPU2CPU*nb_devices+did]);
+                clock_gettime(CLOCK_REALTIME, &timings[did].enter_wait_gpu2cpu);
                 do {
-                    ze_rc = zeEventQueryStatus(device->streams[1].events[0]);
+                    ze_rc = zeFenceQueryStatus(device->streams[1].fences[0]);
                     if( ZE_RESULT_SUCCESS == ze_rc ) {
                         fprintf(stderr, "STATUS: copies ended from device %d of driver %d\n", deviceId, driverId);
 			            break;
                     } else  if( ZE_RESULT_NOT_READY != ze_rc ) {
-                        LEVEL_ZERO_CHECK_ERROR( "(progress_stream) zeEventQueryStatus ", ze_rc, { continue; } );
+                        LEVEL_ZERO_CHECK_ERROR( "(progress_stream) zeFenceQueryStatus ", ze_rc, { continue; } );
                     } else {
                         usleep(10);
                     }
                 } while(1);
-                clock_gettime(CLOCK_REALTIME, &times[TIME_END_GPU2CPU*nb_devices+did]);
+                clock_gettime(CLOCK_REALTIME, &timings[did].end_gpu2cpu);
                 fprintf(stderr, "STATUS: GPU->CPU copies on device %d of driver %d completed!\n", deviceId, driverId);
 
                 int error0 = 0;
@@ -540,9 +535,9 @@ int main(int argc, char *argv[])
                                 errors++;
                             }
                         } else {
-                            if(cpuC[i*N+j] != 3.0) {
+                            if(cpuC[i*N+j] != (double)NRUNS) {
                                 if(0 == error1)
-                                    fprintf(stderr, "ERROR during checks of driver %d: C[%d, %d] = %g, expected 3.0\n", did, i, j, cpuC[i*N+j]);
+                                    fprintf(stderr, "ERROR during checks of driver %d: C[%d, %d] = %g, expected %g\n", did, i, j, cpuC[i*N+j], (double)NRUNS);
                                 error1++;
                                 errors++;
                             }
@@ -558,22 +553,25 @@ int main(int argc, char *argv[])
 
     for(did = 0; did < nb_devices; did++) {
         printf("TIME: Device %d\n", did);
-        printf("TIME: START: %ld.%09ld s\n", times[TIME_START*nb_devices+did].tv_sec, times[TIME_START*nb_devices+did].tv_nsec);
-        printf("TIME: START_CPU2GPU:            %11.9g s\n", diff_timespec(&times[TIME_START_CPU2GPU*nb_devices+did], &times[TIME_START*nb_devices+did]));
-        printf("TIME: START_ENTER_WAIT_CPU2GPU: %11.9g s\n", diff_timespec(&times[TIME_ENTER_WAIT_CPU2GPU*nb_devices+did], &times[TIME_START_CPU2GPU*nb_devices+did]));
-        printf("TIME: END_CPU2GPU:              %11.9g s\n", diff_timespec(&times[TIME_END_CPU2GPU*nb_devices+did], &times[TIME_ENTER_WAIT_CPU2GPU*nb_devices+did]));
+        printf("TIME: START: %ld.%09ld s\n", timings[did].start.tv_sec, timings[did].start.tv_nsec);
+        printf("TIME: START_CPU2GPU:            %11.9g s\n", diff_timespec(&timings[did].start_cpu2gpu, &timings[did].start));
+        printf("TIME: START_ENTER_WAIT_CPU2GPU: %11.9g s\n", diff_timespec(&timings[did].enter_wait_cpu2gpu, &timings[did].start_cpu2gpu));
+        printf("TIME: END_CPU2GPU:              %11.9g s\n", diff_timespec(&timings[did].end_cpu2gpu, &timings[did].enter_wait_cpu2gpu));
         for(int run = 0; run < NRUNS; run++) {
             printf("TIME: START_KERNEL(%3d):        %11.9g s\n", run, 
-                    diff_timespec(&times[TIME_START_KERNEL(run)*nb_devices+did], 
-                                  run == 0 ? &times[TIME_END_CPU2GPU*nb_devices+did] : &times[TIME_END_KERNEL(run-1)*nb_devices+did]));
+                    diff_timespec(&timings[did].runs[run].start, 
+                                  run == 0 ? &timings[did].end_cpu2gpu : &timings[did].runs[run-1].end));
             printf("TIME: ENTER_WAIT_KERNEL(%3d):   %11.9g s\n", run, 
-                    diff_timespec(&times[TIME_ENTER_WAIT_KERNEL(run)*nb_devices+did], &times[TIME_START_KERNEL(run)*nb_devices+did]));
+                    diff_timespec(&timings[did].runs[run].enter_wait, &timings[did].runs[run].start));
             printf("TIME: END_KERNEL(%3d):          %11.9g s\n", run, 
-                    diff_timespec(&times[TIME_END_KERNEL(run)*nb_devices+did], &times[TIME_ENTER_WAIT_KERNEL(run)*nb_devices+did]));
+                    diff_timespec(&timings[did].runs[run].end, &timings[did].runs[run].enter_wait));
+            double tot_kernel = diff_timespec(&timings[did].runs[run].end, &timings[did].runs[run].start);
+            double gflops = 2.0*N*N*N/1e9;
+            printf("PERF: device %d run %d %11.9g s for %d x %d x %d DGEMM (%g . 10^9 flops): %g GFLOP/s\n", did, run, tot_kernel, N, N, N, gflops, gflops/tot_kernel);
         }
-        printf("TIME: START_GPU2CPU:            %11.9g s\n", diff_timespec(&times[TIME_START_GPU2CPU*nb_devices+did], &times[TIME_END_KERNEL(NRUNS-1)*nb_devices+did]));
-        printf("TIME: ENTER_WAIT_GPU2CPU:       %11.9g s\n", diff_timespec(&times[TIME_ENTER_WAIT_GPU2CPU*nb_devices+did], &times[TIME_START_GPU2CPU*nb_devices+did]));
-        printf("TIME: END_GPU2CPU:              %11.9g s\n", diff_timespec(&times[TIME_END_GPU2CPU*nb_devices+did], &times[TIME_ENTER_WAIT_GPU2CPU*nb_devices+did]));
+        printf("TIME: START_GPU2CPU:            %11.9g s\n", diff_timespec(&timings[did].start_gpu2cpu, &timings[did].runs[NRUNS-1].end));
+        printf("TIME: ENTER_WAIT_GPU2CPU:       %11.9g s\n", diff_timespec(&timings[did].enter_wait_gpu2cpu, &timings[did].start_gpu2cpu));
+        printf("TIME: END_GPU2CPU:              %11.9g s\n", diff_timespec(&timings[did].end_gpu2cpu, &timings[did].enter_wait_gpu2cpu));
         printf("\n");
     }
 
