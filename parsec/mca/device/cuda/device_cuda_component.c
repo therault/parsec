@@ -35,7 +35,7 @@ static int device_cuda_component_register(void);
 
 /* mca params */
 int parsec_device_cuda_enabled_index, parsec_device_cuda_enabled;
-int parsec_cuda_sort_pending = 0, parsec_cuda_max_streams = PARSEC_GPU_MAX_STREAMS;
+int parsec_cuda_sort_pending = 0, parsec_cuda_max_streams = PARSEC_GPU_MAX_STREAMS, parsec_cuda_use_unified_memory = 0;
 int parsec_cuda_memory_block_size, parsec_cuda_memory_percentage, parsec_cuda_memory_number_of_blocks;
 char* parsec_cuda_lib_path = NULL;
 
@@ -160,6 +160,20 @@ static int device_cuda_component_query(mca_base_module_t **module, int *priority
     return MCA_SUCCESS;
 }
 
+static void *parsec_allocate_cuda_unified_memory(size_t size)
+{
+    void *ret;
+    cudaError_t cudaStatus = cudaMallocManaged(&ret, size, cudaMemAttachGlobal);
+    PARSEC_CUDA_CHECK_ERROR( "cudaMallocManaged ", cudastatus, {return NULL;} );
+    return NULL;
+}
+
+static void parsec_free_cuda_unified_memory(void *ptr)
+{
+    cudaError_t cudaStatus = cudaFree(ptr);
+    PARSEC_CUDA_CHECK_ERROR( "cudaFree ", cudastatus, {} );
+}
+
 static int device_cuda_component_register(void)
 {
     parsec_device_cuda_enabled_index = parsec_mca_param_reg_int_name("device_cuda", "enabled",
@@ -195,11 +209,19 @@ static int device_cuda_component_register(void)
     (void)parsec_mca_param_reg_int_name("device_cuda", "sort_pending_tasks",
                                         "Boolean to let the GPU engine sort the first pending tasks stored in the list",
                                         false, false, 0, &parsec_cuda_sort_pending);
+    (void)parsec_mca_param_reg_int_name("device_cuda", "use_unified_memory",
+                                        "Use Unified Memory instead of explicit data management for the GPU. EXPERIMENTAL.",
+                                        false, false, 0, &parsec_cuda_use_unified_memory);
 #if defined(PARSEC_PROF_TRACE)
     (void)parsec_mca_param_reg_int_name("device_cuda", "one_profiling_stream_per_cuda_stream",
                                         "Boolean to separate the profiling of each cuda stream into a single profiling stream",
                                         false, false, 0, &parsec_device_gpu_one_profiling_stream_per_gpu_stream);
 #endif
+
+    if(parsec_device_cuda_enabled && parsec_cuda_use_unified_memory ) {
+        parsec_data_allocate = parsec_allocate_cuda_unified_memory;
+        parsec_data_free = parsec_free_cuda_unified_memory;
+    }
 
     /* If CUDA was not requested avoid initializing the devices */
     return (0 == parsec_device_cuda_enabled ? MCA_ERROR : MCA_SUCCESS);

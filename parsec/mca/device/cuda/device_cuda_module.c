@@ -475,11 +475,13 @@ parsec_cuda_module_init( int dev_id, parsec_device_module_t** module )
     gpu_device->sort_starting_p = NULL;
     gpu_device->peer_access_mask = 0;  /* No GPU to GPU direct transfer by default */
 
-    if( PARSEC_SUCCESS != parsec_cuda_memory_reserve(cuda_device,
-                                                     parsec_cuda_memory_percentage,
-                                                     parsec_cuda_memory_number_of_blocks,
-                                                     parsec_cuda_memory_block_size) ) {
-        goto release_device;
+    if( !parsec_cuda_use_unified_memory ) {
+        if( PARSEC_SUCCESS != parsec_cuda_memory_reserve(cuda_device,
+                                                         parsec_cuda_memory_percentage,
+                                                         parsec_cuda_memory_number_of_blocks,
+                                                         parsec_cuda_memory_block_size) ) {
+            goto release_device;
+        }
     }
 
     if( show_caps ) {
@@ -832,6 +834,9 @@ parsec_cuda_memory_release( parsec_device_cuda_module_t* cuda_device )
 {
     cudaError_t status;
 
+    if( parsec_cuda_use_unified_memory )
+        return PARSEC_SUCCESS;
+
     status = cudaSetDevice( cuda_device->cuda_index );
     PARSEC_CUDA_CHECK_ERROR( "(parsec_cuda_memory_release) cudaSetDevice ", status,
                             {continue;} );
@@ -871,6 +876,8 @@ parsec_gpu_data_reserve_device_space( parsec_device_cuda_module_t* cuda_device,
     int i, j, data_avail_epoch = 0;
     parsec_gpu_data_copy_t *gpu_mem_lru_cycling;
     parsec_device_gpu_module_t *gpu_device = &cuda_device->super;
+
+    assert( !parsec_cuda_use_unified_memory );
 
 #if defined(PARSEC_DEBUG_NOISIER)
     char task_name[MAX_TASK_STRLEN];
@@ -1189,6 +1196,7 @@ parsec_default_cuda_stage_in(parsec_gpu_task_t        *gtask,
     size_t count;
     parsec_cuda_exec_stream_t *cuda_stream = (parsec_cuda_exec_stream_t *)gpu_stream;
     int i;
+    assert(!parsec_cuda_use_unified_memory);
     for(i = 0; i < task->task_class->nb_flows; i++){
         if(flow_mask & (1U << i)){
             copy_in = task->data[i].data_in;
@@ -1230,6 +1238,7 @@ parsec_default_cuda_stage_out(parsec_gpu_task_t        *gtask,
     size_t count;
     parsec_cuda_exec_stream_t *cuda_stream = (parsec_cuda_exec_stream_t*)gpu_stream;
     int i;
+    assert(!parsec_cuda_use_unified_memory);
     for(i = 0; i < task->task_class->nb_flows; i++){
         if(flow_mask & (1U << i)){
             copy_in = task->data[i].data_out;
@@ -1273,6 +1282,8 @@ parsec_gpu_data_stage_in( parsec_device_cuda_module_t* cuda_device,
     uint32_t nb_elts = gpu_task->flow_nb_elts[flow->flow_index];
     int transfer_from = -1;
     int undo_readers_inc_if_no_transfer = 0;
+
+    assert(!parsec_cuda_use_unified_memory);
 
     if( gpu_task->task_type == PARSEC_GPU_TASK_TYPE_PREFETCH ) {
         PARSEC_DEBUG_VERBOSE(3, parsec_gpu_output_stream,
@@ -2601,6 +2612,8 @@ parsec_cuda_kernel_scheduler( parsec_execution_stream_t *es,
                              {return PARSEC_HOOK_RETURN_DISABLE;} );
 
  check_in_deps:
+    if( parsec_cuda_use_unified_memory )
+        goto execute_task;
     if( NULL != gpu_task ) {
         PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
                              "GPU[%s]:\tUpload data (if any) for %s priority %d",
@@ -2630,6 +2643,7 @@ parsec_cuda_kernel_scheduler( parsec_execution_stream_t *es,
     }
     gpu_task = progress_task;
 
+ execute_task:
     /* Stage-in completed for this task: it is ready to be executed */
     exec_stream = (exec_stream + 1) % (gpu_device->num_exec_streams - 2);  /* Choose an exec_stream */
     if( NULL != gpu_task ) {
@@ -2660,6 +2674,13 @@ parsec_cuda_kernel_scheduler( parsec_execution_stream_t *es,
         progress_task = NULL;
     }
     gpu_task = progress_task;
+    if( parsec_cuda_use_unified_memory ) {
+         if( NULL != gpu_task ) {
+            progress_task = NULL;
+            goto complete_task;
+         }
+         goto fetch_task_from_shared_queue;
+    }
     out_task_submit = progress_task;
 
  get_data_out_of_device:
@@ -2702,6 +2723,7 @@ parsec_cuda_kernel_scheduler( parsec_execution_stream_t *es,
                              parsec_gpu_describe_gpu_task(tmp, MAX_TASK_STRLEN, gpu_task),
                              gpu_task->ec->priority);
         if( PARSEC_GPU_TASK_TYPE_D2D_COMPLETE == gpu_task->task_type ) {
+            assert( !parsec_cuda_use_unified_memory );
             goto get_data_out_of_device;
         }
     } else {
@@ -2721,11 +2743,13 @@ parsec_cuda_kernel_scheduler( parsec_execution_stream_t *es,
     /* Everything went fine so far, the result is correct and back in the main memory */
     PARSEC_LIST_ITEM_SINGLETON(gpu_task);
     if (gpu_task->task_type == PARSEC_GPU_TASK_TYPE_D2HTRANSFER) {
+        assert(!parsec_cuda_use_unified_memory);
         parsec_gpu_complete_w2r_task(gpu_device, gpu_task, es);
         gpu_task = progress_task;
         goto fetch_task_from_shared_queue;
     }
     if (gpu_task->task_type == PARSEC_GPU_TASK_TYPE_D2D_COMPLETE) {
+        assert(!parsec_cuda_use_unified_memory);
         free( gpu_task->ec );
         gpu_task->ec = NULL;
         goto remove_gpu_task;
