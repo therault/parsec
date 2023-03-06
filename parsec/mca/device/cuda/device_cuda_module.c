@@ -119,12 +119,20 @@ parsec_cuda_memory_register(parsec_device_module_t* device, parsec_data_collecti
                             void* ptr, size_t length)
 {
     cudaError_t status;
+    struct cudaPointerAttributes attributes;
     int rc = PARSEC_ERROR;
 
     /* Memory needs to be registered only once with CUDA. */
     if (desc->memory_registration_status == PARSEC_MEMORY_STATUS_REGISTERED) {
         rc = PARSEC_SUCCESS;
         return rc;
+    }
+
+
+    status = cudaPointerGetAttributes(&attributes, ptr);
+    if( cudaSuccess == status ) {
+        if(cudaMemoryTypeManaged == attributes.type)
+        return PARSEC_SUCCESS;
     }
 
     /*
@@ -2389,75 +2397,81 @@ parsec_cuda_kernel_epilog( parsec_device_gpu_module_t *gpu_device,
                          parsec_task_snprintf(tmp, MAX_TASK_STRLEN, this_task) );
 #endif
 
-    for( i = 0; i < this_task->task_class->nb_flows; i++ ) {
-        /* Make sure data_in is not NULL */
-        if( NULL == this_task->data[i].data_in ) continue;
-
-        /* Don't bother if there is no real data (aka. CTL or no output) */
-        if(NULL == this_task->data[i].data_out) continue;
-
-
-        if( !(gpu_task->flow[i]->flow_flags & PARSEC_FLOW_ACCESS_WRITE) ) {
-            /* Warning data_out for read only flows has been overwritten in pop */
-            continue;
-        }
-
-        gpu_copy = this_task->data[i].data_out;
-        original = gpu_copy->original;
-        cpu_copy = original->device_copies[0];
-
-        /* If it is a copy managed by the user, don't bother either */
-        if( 0 == (gpu_copy->flags & PARSEC_DATA_FLAG_PARSEC_OWNED) ) continue;
-        
-        /**
-         * There might be a race condition here. We can't assume the first CPU
-         * version is the corresponding CPU copy, as a new CPU-bound data
-         * might have been created meanwhile.
-         *
-         * WARNING: For now we always forward the cpu_copy to the next task, to
-         * do that, we lie to the engine by updating the CPU copy to the same
-         * status than the GPU copy without updating the data itself. Thus, the
-         * cpu copy is really invalid. this is related to Issue #88, and the
-         * fact that:
-         *      - we don't forward the gpu copy as output
-         *      - we always take a cpu copy as input, so it has to be in the
-         *        same state as the GPU to prevent an extra data movement.
-         */
-        assert( PARSEC_DATA_COHERENCY_OWNED == gpu_copy->coherency_state );
-        gpu_copy->coherency_state = PARSEC_DATA_COHERENCY_SHARED;
-        cpu_copy->coherency_state = PARSEC_DATA_COHERENCY_SHARED;
-
-        /**
-         *  The cpu_copy will be updated in the completion, and at that moment
-         *  the two versions will be identical.
-         */
-        cpu_copy->version = gpu_copy->version;
-        PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
-                             "GPU[%s]: CPU copy %p [ref_count %d] gets the same version %d as GPU copy %p [ref_count %d] at %s:%d",
+    if( parsec_cuda_use_unified_memory ) {
+        PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream, "GPU[%s]: Skipping pushouts in epilog of %s because we run in unified memory",
                              gpu_device->super.name,
-                             cpu_copy, cpu_copy->super.super.obj_reference_count, cpu_copy->version, gpu_copy, gpu_copy->super.super.obj_reference_count,
-                             __FILE__, __LINE__);
+                             parsec_task_snprintf(tmp, MAX_TASK_STRLEN, this_task));
+    } else {
+        for( i = 0; i < this_task->task_class->nb_flows; i++ ) {
+            /* Make sure data_in is not NULL */
+            if( NULL == this_task->data[i].data_in ) continue;
 
-        /**
-         * Let's lie to the engine by reporting that working version of this
-         * data (aka. the one that GEMM worked on) is now on the CPU.
-         */
-        this_task->data[i].data_out = cpu_copy;
+            /* Don't bother if there is no real data (aka. CTL or no output) */
+            if(NULL == this_task->data[i].data_out) continue;
 
-        assert( 0 == gpu_copy->readers );
 
-        if( gpu_task->pushout & (1 << i) ) {
-            PARSEC_DEBUG_VERBOSE(20, parsec_gpu_output_stream,
-                                 "CUDA copy %p [ref_count %d] moved to the read LRU in %s",
-                                 gpu_copy, gpu_copy->super.super.obj_reference_count, __func__);
-            parsec_list_item_ring_chop((parsec_list_item_t*)gpu_copy);
-            PARSEC_LIST_ITEM_SINGLETON(gpu_copy);
-            parsec_list_push_back(&gpu_device->gpu_mem_lru, (parsec_list_item_t*)gpu_copy);
-        } else {
-            PARSEC_DEBUG_VERBOSE(20, parsec_gpu_output_stream,
-                                 "CUDA copy %p [ref_count %d] moved to the owned LRU in %s",
-                                 gpu_copy, gpu_copy->super.super.obj_reference_count, __func__);
-            parsec_list_push_back(&gpu_device->gpu_mem_owned_lru, (parsec_list_item_t*)gpu_copy);
+            if( !(gpu_task->flow[i]->flow_flags & PARSEC_FLOW_ACCESS_WRITE) ) {
+                /* Warning data_out for read only flows has been overwritten in pop */
+                continue;
+            }
+
+            gpu_copy = this_task->data[i].data_out;
+            original = gpu_copy->original;
+            cpu_copy = original->device_copies[0];
+
+            /* If it is a copy managed by the user, don't bother either */
+            if( 0 == (gpu_copy->flags & PARSEC_DATA_FLAG_PARSEC_OWNED) ) continue;
+            
+            /**
+             * There might be a race condition here. We can't assume the first CPU
+             * version is the corresponding CPU copy, as a new CPU-bound data
+             * might have been created meanwhile.
+             *
+             * WARNING: For now we always forward the cpu_copy to the next task, to
+             * do that, we lie to the engine by updating the CPU copy to the same
+             * status than the GPU copy without updating the data itself. Thus, the
+             * cpu copy is really invalid. this is related to Issue #88, and the
+             * fact that:
+             *      - we don't forward the gpu copy as output
+             *      - we always take a cpu copy as input, so it has to be in the
+             *        same state as the GPU to prevent an extra data movement.
+             */
+            assert( PARSEC_DATA_COHERENCY_OWNED == gpu_copy->coherency_state );
+            gpu_copy->coherency_state = PARSEC_DATA_COHERENCY_SHARED;
+            cpu_copy->coherency_state = PARSEC_DATA_COHERENCY_SHARED;
+
+            /**
+             *  The cpu_copy will be updated in the completion, and at that moment
+             *  the two versions will be identical.
+             */
+            cpu_copy->version = gpu_copy->version;
+            PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
+                                "GPU[%s]: CPU copy %p [ref_count %d] gets the same version %d as GPU copy %p [ref_count %d] at %s:%d",
+                                gpu_device->super.name,
+                                cpu_copy, cpu_copy->super.super.obj_reference_count, cpu_copy->version, gpu_copy, gpu_copy->super.super.obj_reference_count,
+                                __FILE__, __LINE__);
+
+            /**
+             * Let's lie to the engine by reporting that working version of this
+             * data (aka. the one that GEMM worked on) is now on the CPU.
+             */
+            this_task->data[i].data_out = cpu_copy;
+
+            assert( 0 == gpu_copy->readers );
+
+            if( gpu_task->pushout & (1 << i) ) {
+                PARSEC_DEBUG_VERBOSE(20, parsec_gpu_output_stream,
+                                    "CUDA copy %p [ref_count %d] moved to the read LRU in %s",
+                                    gpu_copy, gpu_copy->super.super.obj_reference_count, __func__);
+                parsec_list_item_ring_chop((parsec_list_item_t*)gpu_copy);
+                PARSEC_LIST_ITEM_SINGLETON(gpu_copy);
+                parsec_list_push_back(&gpu_device->gpu_mem_lru, (parsec_list_item_t*)gpu_copy);
+            } else {
+                PARSEC_DEBUG_VERBOSE(20, parsec_gpu_output_stream,
+                                    "CUDA copy %p [ref_count %d] moved to the owned LRU in %s",
+                                    gpu_copy, gpu_copy->super.super.obj_reference_count, __func__);
+                parsec_list_push_back(&gpu_device->gpu_mem_owned_lru, (parsec_list_item_t*)gpu_copy);
+            }
         }
     }
     return 0;
@@ -2612,8 +2626,24 @@ parsec_cuda_kernel_scheduler( parsec_execution_stream_t *es,
                              {return PARSEC_HOOK_RETURN_DISABLE;} );
 
  check_in_deps:
-    if( parsec_cuda_use_unified_memory )
+    if( parsec_cuda_use_unified_memory ) {
+        /* If we use unified memory, we skip the kernel_push step, but we need to set the data_out
+         * as reserve_device_space would do, so that the DTD interface finds the 'GPU' pointers at the
+         * right place. */
+        if(NULL != gpu_task) {
+            parsec_task_t *this_task = gpu_task->ec;
+            for(int i = 0; i < this_task->task_class->nb_flows; i++ ) {
+                const parsec_flow_t *flow = gpu_task->flow[i];
+                assert( flow && (flow->flow_index == i) );
+
+                /* Skip CTL flows only */
+                if(PARSEC_FLOW_ACCESS_NONE == (PARSEC_FLOW_ACCESS_MASK & flow->flow_flags)) continue;
+
+                this_task->data[i].data_out = this_task->data[i].data_in;
+            }
+        }
         goto execute_task;
+    }
     if( NULL != gpu_task ) {
         PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
                              "GPU[%s]:\tUpload data (if any) for %s priority %d",

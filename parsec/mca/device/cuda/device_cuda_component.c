@@ -164,14 +164,14 @@ static void *parsec_allocate_cuda_unified_memory(size_t size)
 {
     void *ret;
     cudaError_t cudaStatus = cudaMallocManaged(&ret, size, cudaMemAttachGlobal);
-    PARSEC_CUDA_CHECK_ERROR( "cudaMallocManaged ", cudastatus, {return NULL;} );
-    return NULL;
+    PARSEC_CUDA_CHECK_ERROR( "cudaMallocManaged ", cudaStatus, {return NULL;} );
+    return ret;
 }
 
 static void parsec_free_cuda_unified_memory(void *ptr)
 {
     cudaError_t cudaStatus = cudaFree(ptr);
-    PARSEC_CUDA_CHECK_ERROR( "cudaFree ", cudastatus, {} );
+    PARSEC_CUDA_CHECK_ERROR( "cudaFree ", cudaStatus, {} );
 }
 
 static int device_cuda_component_register(void)

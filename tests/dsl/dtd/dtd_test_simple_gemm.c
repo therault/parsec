@@ -192,7 +192,7 @@ int gemm_kernel_cuda(parsec_device_gpu_module_t *gpu_device,
     assert(NULL != handle);
     one_device = parsec_info_get(&gpu_device->super.infos, Cu1);
     assert(NULL != one_device);
-    gettimeofday(&start, NULL);
+    if(verbose) gettimeofday(&start, NULL);
 
     status = cublasDgemm_v2(handle,
                             CUBLAS_OP_N, CUBLAS_OP_N,
@@ -200,14 +200,15 @@ int gemm_kernel_cuda(parsec_device_gpu_module_t *gpu_device,
                             one_device, a_gpu, mb,
                             b_gpu, kb,
                             one_device, c_gpu, mb);
-    gettimeofday(&end, NULL);
-    timersub(&end, &start, &diff);
-    delta = (double)diff.tv_sec + (double)diff.tv_usec/1e6;
-    if(verbose)
+    if(verbose) {
+        gettimeofday(&end, NULL);
+        timersub(&end, &start, &diff);
+        delta = (double)diff.tv_sec + (double)diff.tv_usec/1e6;
         fprintf(stderr, "GEMM(%d, %d, %d) with tiles of %dx%d, %dx%d, %dx%d on node %d, GPU %s submitted in %g s\n",
                 m, n, k, mb, kb, kb, nb, mb, kb,
                 this_task->taskpool->context->my_rank,
                 gpu_stream->name, delta);
+    }
 
     PARSEC_CUDA_CHECK_ERROR("cublasDgemm_v2 ", status,
                             { return PARSEC_HOOK_RETURN_ERROR; });
