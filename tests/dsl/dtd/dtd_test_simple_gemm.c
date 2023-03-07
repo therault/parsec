@@ -36,7 +36,6 @@ static int TILE_FULL = -1;
 static parsec_info_id_t CuHI = -1;
 static parsec_info_id_t Cu1 = -1;
 static int verbose = 0;
-static int device = PARSEC_DEV_CUDA;
 static int P = -1;
 static int Q = -1;
 
@@ -133,7 +132,7 @@ int initialize_matrix(parsec_context_t *parsec_context, int rank, parsec_matrix_
                                                    PARSEC_DTD_EMPTY_FLAG, &mat->super.mb,
                                                    PARSEC_DTD_EMPTY_FLAG, &seed,
                                                    PARSEC_DTD_ARG_END);
-            if(PARSEC_DEV_CUDA == device &&
+            if(nb_gpus > 0 &&
                (int)mat->super.super.rank_of_key(&mat->super.super, key) == rank ) {
                 if( verbose ) {
                     fprintf(stderr, "Advice %s(%d, %d) to prefer GPU device %d (parsec device %d) of rank %d\n",
@@ -143,7 +142,8 @@ int initialize_matrix(parsec_context_t *parsec_context, int rank, parsec_matrix_
                                              gpu_device_index[g],
                                              PARSEC_DEV_DATA_ADVICE_PREFERRED_DEVICE);
             }
-            g = (g + 1) % nb_gpus;
+            if(nb_gpus > 0)
+                g = (g + 1) % nb_gpus;
         }
     }
     parsec_dtd_data_flush_all(tp, &mat->super.super);
@@ -235,7 +235,7 @@ int gemm_kernel_cpu(parsec_execution_stream_t *es,
                            &mb, &nb, &kb);
 
     gettimeofday(&start, NULL);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, mb, nb, kb, alpha, A, mb, B, kb, beta, C, mb);
+    cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, mb, nb, kb, alpha, A, mb, B, kb, beta, C, mb);
     gettimeofday(&end, NULL);
     timersub(&end, &start, &diff);
 
@@ -251,12 +251,13 @@ int gemm_kernel_cpu(parsec_execution_stream_t *es,
 }
 #endif
 
-int simple_gemm(parsec_context_t *parsec_context, parsec_matrix_block_cyclic_t *A, parsec_matrix_block_cyclic_t *B, parsec_matrix_block_cyclic_t *C)
+int simple_gemm(parsec_context_t *parsec_context, parsec_matrix_block_cyclic_t *A, parsec_matrix_block_cyclic_t *B, parsec_matrix_block_cyclic_t *C, int on_gpu)
 {
     parsec_taskpool_t *tp = parsec_dtd_taskpool_new();
 
     parsec_data_key_t keyA, keyB, keyC;
     int perr;
+    int device;
 
     parsec_task_class_t *gemm_tc;
 
@@ -278,9 +279,15 @@ int simple_gemm(parsec_context_t *parsec_context, parsec_matrix_block_cyclic_t *
                                            sizeof(int), PARSEC_VALUE,               /* nb */
                                            sizeof(int), PARSEC_VALUE,               /* kb */
                                            PARSEC_DTD_ARG_END);
-    parsec_dtd_task_class_add_chore(tp, gemm_tc, PARSEC_DEV_CUDA, gemm_kernel_cuda);
+    if(on_gpu) {
+        parsec_dtd_task_class_add_chore(tp, gemm_tc, PARSEC_DEV_CUDA, gemm_kernel_cuda);
+        device = PARSEC_DEV_CUDA;
+    }
 #if defined(HAVE_BLAS)
-    parsec_dtd_task_class_add_chore(tp, gemm_tc, PARSEC_DEV_CPU, gemm_kernel_cpu);
+    if(!on_gpu) {
+        parsec_dtd_task_class_add_chore(tp, gemm_tc, PARSEC_DEV_CPU, gemm_kernel_cpu);
+        device = PARSEC_DEV_CPU;
+    }
 #endif
 
     for( int i = 0; i < C->super.mt; i++ ) {
@@ -451,9 +458,101 @@ static void destroy_matrix(parsec_matrix_block_cyclic_t *dc)
     free(dc);
 }
 
+int compare_tiles(parsec_execution_stream_t *es, parsec_task_t *this_task)
+{
+    (void)es;
+    double *C;
+    double *Ccheck;
+    int i, j, mb, nb, m, n, M, ld;
+    volatile int32_t *nberrortile;
+
+    parsec_dtd_unpack_args(this_task, &C, &Ccheck, &m, &n, &mb, &nb, &M, &ld, &nberrortile);
+
+    for( j = 0; j < nb; j++ ) {
+        for( i = 0; i < mb; i++ ) {
+            if( fabs(*C - *Ccheck) > 1e-10 ) {
+                fprintf(stderr, "Tiles C[%d, %d] and Ccheck[%d, %d] differ at position (%d, %d): |%g - %g| = %g > 1e-10\n",
+                        m, n, m, n, i, j, *C, *Ccheck, fabs(*C-*Ccheck));
+                parsec_atomic_fetch_inc_int32(nberrortile);
+            }
+            C++;
+            Ccheck++;
+        }
+        C += ld - i;
+        Ccheck += ld -i;
+    }
+    return PARSEC_HOOK_RETURN_DONE;
+}
+
+static int eltwise_compare(parsec_context_t *parsec_context, parsec_matrix_block_cyclic_t *dcC, parsec_matrix_block_cyclic_t *dcCcheck)
+{
+    parsec_taskpool_t *tp = parsec_dtd_taskpool_new();
+
+    parsec_data_key_t keyC, keyCcheck;
+    int perr;
+    volatile int32_t nberrortile = 0;
+
+    parsec_task_class_t *cmp_tc;
+
+    perr = parsec_context_start(parsec_context);
+    PARSEC_CHECK_ERROR(perr, "parsec_context_start");
+
+    // Registering the dtd_handle with PARSEC context
+    perr = parsec_context_add_taskpool(parsec_context, tp);
+    PARSEC_CHECK_ERROR(perr, "parsec_context_add_taskpool");
+
+    cmp_tc = parsec_dtd_create_task_class(tp, "cmp",
+                                          PASSED_BY_REF, PARSEC_INPUT | TILE_FULL | PARSEC_AFFINITY,
+                                          PASSED_BY_REF, PARSEC_INPUT | TILE_FULL,
+                                          sizeof(int), PARSEC_VALUE,          /* m    */
+                                          sizeof(int), PARSEC_VALUE,          /* n    */
+                                          sizeof(int), PARSEC_VALUE,          /* mb   */
+                                          sizeof(int), PARSEC_VALUE,          /* nb   */
+                                          sizeof(int), PARSEC_VALUE,          /* M    */
+                                          sizeof(int), PARSEC_VALUE,          /* ld   */
+                                          sizeof(volatile int32_t *), PARSEC_REF, /* nberrortile */
+                                          PARSEC_DTD_ARG_END);
+    parsec_dtd_task_class_add_chore(tp, cmp_tc, PARSEC_DEV_CPU, compare_tiles);
+
+    for( int i = 0; i < dcC->super.mt; i++ ) {
+        for( int j = 0; j < dcC->super.nt; j++ ) {
+            keyC = dcC->super.super.data_key(&dcC->super.super, i, j);
+            keyCcheck = dcCcheck->super.super.data_key(&dcCcheck->super.super, i, j);
+
+            parsec_dtd_insert_task_with_task_class(tp, cmp_tc, 1, PARSEC_DEV_CPU,
+                                                   PARSEC_DTD_EMPTY_FLAG, PARSEC_DTD_TILE_OF_KEY(&dcC->super.super, keyC),
+                                                   PARSEC_DTD_EMPTY_FLAG, PARSEC_DTD_TILE_OF_KEY(&dcCcheck->super.super, keyCcheck),
+                                                   PARSEC_DTD_EMPTY_FLAG, &i,
+                                                   PARSEC_DTD_EMPTY_FLAG, &j,
+                                                   PARSEC_DTD_EMPTY_FLAG, &dcC->super.mb,
+                                                   PARSEC_DTD_EMPTY_FLAG, &dcC->super.nb,
+                                                   PARSEC_DTD_EMPTY_FLAG, &dcC->super.m,
+                                                   PARSEC_DTD_EMPTY_FLAG, &dcC->super.mb,
+                                                   PARSEC_DTD_EMPTY_FLAG, &nberrortile,
+                                                   PARSEC_DTD_ARG_END);
+        }
+    }
+    parsec_dtd_data_flush_all(tp, &dcC->super.super);
+    parsec_dtd_data_flush_all(tp, &dcCcheck->super.super);
+
+    // Wait for task completion
+    perr = parsec_taskpool_wait(tp);
+    PARSEC_CHECK_ERROR(perr, "parsec_taskpool_wait");
+
+    perr = parsec_context_wait(parsec_context);
+    PARSEC_CHECK_ERROR(perr, "parsec_context_wait");
+
+    parsec_dtd_task_class_release(tp, cmp_tc);
+
+    parsec_taskpool_free(tp);
+
+    return nberrortile;
+
+}
+
 int main(int argc, char **argv)
 {
-    int ret = 0, rc, nbgpus = 0;
+    int ret = EXIT_SUCCESS, rc, nbgpus = 0;
     parsec_context_t *parsec_context = NULL;
     int rank, world;
     int mb = 1024, nb = 1024, kb = 1024;
@@ -461,6 +560,7 @@ int main(int argc, char **argv)
     double min_perf=0.0;
     int runs = 5;
     int debug=-1;
+    int check = 0, on_gpu=1;
 
 #if defined(PARSEC_HAVE_MPI)
     {
@@ -491,10 +591,11 @@ int main(int argc, char **argv)
                 {"Debug",   required_argument, 0, 'D'},
                 {"Alarm",   required_argument, 0, 'A'},
                 {"help",    no_argument,       0, 'h'},
+                {"check",   no_argument,       0, 'x'},
                 {0, 0,                         0, 0}
         };
 
-        int c = getopt_long(argc, argv, "M:N:K:m:n:k:P:Q:t:d:D:A:vh",
+        int c = getopt_long(argc, argv, "M:N:K:m:n:k:P:Q:t:d:D:A:xvh",
                             long_options, &option_index);
         if( c == -1 )
             break;
@@ -530,12 +631,15 @@ int main(int argc, char **argv)
             case 'v':
                 verbose = !verbose;
                 break;
+            case 'x':
+                check = 1;
+                break;
             case 'd':
                 if(strcmp(optarg, "GPU") == 0) {
-                    device=PARSEC_DEV_CUDA;
+                    on_gpu=1;
                 } else if(strcmp(optarg, "CPU") == 0) {
 #if defined(HAVE_BLAS)
-                    device=PARSEC_DEV_CPU;
+                    on_gpu=0;
 #else
                     fprintf(stderr, "Error: requested to run on CPU (--device=CPU), but no BLAS library has been found at configure time\n");
                     exit(1);
@@ -576,6 +680,7 @@ int main(int argc, char **argv)
                         "                                 single GPU (kills the process if it takes longer\n"
                         "                                 than the time corresponding to the expected\n"
                         "                                 performance to complete the product)\n"
+                        "   --check|-x:                   Use CPU BLAS to validate the result\n"
                         "\n"
                         " Nota Bene: this test should not be used to evaluate performance of GEMM!\n"
                         "    Use DPLASMA or other linear algebra libraries written on top of PaRSEC to evaluate this.\n"
@@ -609,7 +714,7 @@ int main(int argc, char **argv)
     parsec_context = parsec_init(ncores, &pargc, &pargv);
 
     int *gpu_device_index = NULL;
-    if( PARSEC_DEV_CUDA == device ) {
+    if(on_gpu) {
         nbgpus = get_nb_gpu_devices();
         rc = !(nbgpus >= 1);
         if( rc != 0 ) {
@@ -626,9 +731,9 @@ int main(int argc, char **argv)
                                     NULL);
         assert(CuHI != -1);
         Cu1 = parsec_info_register(&parsec_per_device_infos, "DEVICE::ONE",
-                                   destroy_one_on_device, NULL,
-                                   allocate_one_on_device, NULL,
-                                   NULL);
+                                    destroy_one_on_device, NULL,
+                                    allocate_one_on_device, NULL,
+                                    NULL);
         assert(Cu1 != -1);
     }
 
@@ -643,6 +748,15 @@ int main(int argc, char **argv)
                                                            gpu_device_index, nbgpus);
     parsec_matrix_block_cyclic_t *dcC = create_initialize_matrix(parsec_context, rank, 1901, "C", mb, nb, M, N,
                                                            gpu_device_index, nbgpus);
+    parsec_matrix_block_cyclic_t *dcCcheck = create_initialize_matrix(parsec_context, rank, 1901, "C", mb, nb, M, N,
+                                                           NULL, 0);
+
+#if !defined(HAVE_BLAS)
+    if(check) {
+        fprintf(stderr, "No BLAS library found -- CPU checks are disabled\n");
+        check = 0;
+    }
+#endif
 
     for( int r = 0; r < runs + 1; r++ ) {
         double gflop = 2.0 * M * N * K / 1e9;
@@ -654,7 +768,7 @@ int main(int argc, char **argv)
         if(rank == 0 && maxtime > 0.0) fprintf(stderr, "watchdog: %d seconds\n", (int)maxtime);
         if(maxtime > 0.0) alarm((int)maxtime);
         gettimeofday(&start, NULL);
-        simple_gemm(parsec_context, dcA, dcB, dcC);
+        simple_gemm(parsec_context, dcA, dcB, dcC, on_gpu);
         gettimeofday(&end, NULL);
         timersub(&end, &start, &diff);
         double t = (double)diff.tv_sec + (double)diff.tv_usec / 1e6;
@@ -665,11 +779,23 @@ int main(int argc, char **argv)
             fprintf(stderr, "DTD_GEMM PxQxg: %d %d %d M: %d N: %d K: %d mb: %d nb: %d kb: %d -- done\n",
                     P, Q, nbgpus, M, N, K, mb, nb, kb);
         }
+        if(check) {
+            simple_gemm(parsec_context, dcA, dcB, dcCcheck, 0);
+            int rc = eltwise_compare(parsec_context, dcC, dcCcheck);
+            if(rc != 0) {
+                ret = EXIT_FAILURE;
+                fprintf(stderr, "CHECK DTD_GEMM PxQxg iteration %d: %d %d %d M: %d N: %d K: %d mb: %d nb: %d kb: %d -- Errors\n",
+                        r, P, Q, nbgpus, M, N, K, mb, nb, kb);
+            } else {
+                fprintf(stderr, "CHECK DTD_GEMM PxQxg iteration %d: %d %d %d M: %d N: %d K: %d mb: %d nb: %d kb: %d -- OK\n",
+                        r, P, Q, nbgpus, M, N, K, mb, nb, kb);
+            }
+        }
     }
     // deactivate the alarm if it was set
     alarm(0);
 
-    if(PARSEC_DEV_CUDA == device) {
+    if(on_gpu) {
         // Cleanup data and parsec data structures
         parsec_info_unregister(&parsec_per_stream_infos, CuHI, NULL);
         parsec_info_unregister(&parsec_per_device_infos, Cu1, NULL);
@@ -682,6 +808,7 @@ int main(int argc, char **argv)
     destroy_matrix(dcA);
     destroy_matrix(dcB);
     destroy_matrix(dcC);
+    destroy_matrix(dcCcheck);
 
     parsec_fini(&parsec_context);
 
