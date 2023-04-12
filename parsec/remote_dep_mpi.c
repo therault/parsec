@@ -199,7 +199,7 @@ int remote_dep_set_ctx(parsec_context_t* context, intptr_t opaque_comm_ctx )
         return PARSEC_ERROR;
     }
 
-    if( -1 != context->comm_ctx ) {
+    if( NULL != parsec_ce.tag_register ) {
 #if 0
         /* Currently, parsec is initialized with comm world.
          * When checking for congruent communicators, an application changing
@@ -221,7 +221,6 @@ int remote_dep_set_ctx(parsec_context_t* context, intptr_t opaque_comm_ctx )
         /* Drop the currently used communicator and all other state of the
          * communication engine */
         remote_dep_ce_fini(context);
-        assert( -1 == context->comm_ctx );
     }
     rc = MPI_Comm_dup((MPI_Comm)opaque_comm_ctx, &comm);
     context->comm_ctx = (intptr_t)comm;
