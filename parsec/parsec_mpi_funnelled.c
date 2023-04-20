@@ -95,9 +95,9 @@ static parsec_atomic_lock_t parsec_ce_am_build_lock = PARSEC_ATOMIC_UNLOCKED;
 static int mpi_funnelled_tag_unregister_unsafe_internal(parsec_ce_tag_t tag);
 
 /* Range of index allowed for each type of request.
- * For registered tags, each will get 5 spots in the array of requests.
+ * For registered tags, each will get EACH_STATIC_REQ_RANGE spots in the array of requests.
  * For dynamic tags, there will be a total of MAX_DYNAMIC_REQ_RANGE
- * spots in the same array.
+ * spots in the request array.
  */
 #define MAX_DYNAMIC_REQ_RANGE 30 /* according to current implementation */
 #define EACH_STATIC_REQ_RANGE 5 /* for each registered tag */
@@ -115,9 +115,7 @@ typedef struct mpi_funnelled_tag_s {
                         * to unregister from the array_of_[requests/indices/statuses]
                         */
     parsec_ce_tag_status_t status;  /* The current status of this tag (inactive/active, enable/disable) */
-    size_t  msg_length; /* Maximum length allowed to send for each
-                         * registered TAG.
-                         */
+    size_t  msg_length; /* Maximum length allowed to send for this TAG */
     parsec_ce_am_callback_t callback;  /* callback to call upon reception of the
                                           associated AM */
     void*  cb_data;  /* upper-level data to pass back to the callback */
@@ -250,14 +248,11 @@ mpi_funnelled_internal_get_am_callback(parsec_comm_engine_t *ce,
                                        int src,
                                        void *cb_data)
 {
-    (void) ce; (void) tag; (void) msg_size; (void) cb_data;
+    (void) ce; (void) tag; (void) cb_data;
     assert(mpi_funnelled_last_active_req < size_of_total_reqs);
 
-    mpi_funnelled_callback_t *cb;
-    MPI_Request *request;
-
     mpi_funnelled_handshake_info_t *handshake_info = (mpi_funnelled_handshake_info_t *) msg;
-
+    mpi_funnelled_callback_t *cb;
 
     /* This rank sent it's mem_reg in the activation msg, which is being
      * sent back as rreg of the msg */
@@ -269,15 +264,13 @@ mpi_funnelled_internal_get_am_callback(parsec_comm_engine_t *ce,
     mpi_funnelled_dynamic_req_t *item;
 
     if(post_in_static_array) {
-        request = &array_of_requests[mpi_funnelled_last_active_req];
         cb = &array_of_callbacks[mpi_funnelled_last_active_req];
         MPI_Isend(remote_memory_handle->mem, remote_memory_handle->count, remote_memory_handle->datatype,
                   src, handshake_info->tag, parsec_ce_mpi_comm,
-                  request);
+                  &array_of_requests[mpi_funnelled_last_active_req]);
     } else {
         item = (mpi_funnelled_dynamic_req_t *)parsec_thread_mempool_allocate(mpi_funnelled_dynamic_req_mempool->thread_mempools);
         item->post_isend = 1;
-        request = &item->request;
         cb = &item->cb;
     }
 
@@ -330,18 +323,13 @@ mpi_funnelled_internal_put_am_callback(parsec_comm_engine_t *ce,
 
     mpi_funnelled_handshake_info_t *handshake_info = (mpi_funnelled_handshake_info_t *) msg;
 
-    mpi_funnelled_mem_reg_handle_t *remote_memory_handle = (mpi_funnelled_mem_reg_handle_t *) (handshake_info->remote_memory_handle); /* This is the memory handle of the remote(our) side */
+    /* Get the local memory handle from the peer (it was originally sent with the request) */
+    mpi_funnelled_mem_reg_handle_t *remote_memory_handle = (mpi_funnelled_mem_reg_handle_t*)handshake_info->remote_memory_handle;
 
     assert(mpi_funnelled_last_active_req >= mpi_funnelled_static_req_idx);
 
-    int _size;
-    MPI_Type_size(remote_memory_handle->datatype, &_size);
-
-    int post_in_static_array = 1;
-    mpi_funnelled_dynamic_req_t *item;
-    if(!(mpi_funnelled_last_active_req < size_of_total_reqs)) {
-        post_in_static_array = 0;
-    }
+    mpi_funnelled_dynamic_req_t *item = NULL;
+    int post_in_static_array = mpi_funnelled_last_active_req < size_of_total_reqs;
 
     if(post_in_static_array) {
         request = &array_of_requests[mpi_funnelled_last_active_req];
@@ -677,7 +665,7 @@ mpi_no_thread_tag_register(parsec_ce_tag_t tag,
     }
     parsec_atomic_lock(&parsec_ce_am_build_lock);
     tag_struct->tag = tag;
-    tag_struct->msg_length = msg_length;
+    tag_struct->msg_length = (msg_length + 15) & 0xF;  /* align to 16 bytes */
     tag_struct->callback = callback;
     tag_struct->cb_data = cb_data;
     tag_struct->status = PARSEC_CE_TAG_STATUS_ENABLE;
@@ -1107,8 +1095,7 @@ mpi_no_thread_send_active_message(parsec_comm_engine_t *ce,
 /* Common function to serve callbacks of completed request */
 int
 mpi_no_thread_serve_cb(parsec_comm_engine_t *ce, mpi_funnelled_callback_t *cb,
-                       int mpi_tag, int mpi_source, int length, void *buf,
-                       int reset)
+                       int mpi_tag, int mpi_source, int length, void *buf)
 {
     int ret = 0;
     if(cb->type == MPI_FUNNELLED_TYPE_AM) {
@@ -1116,11 +1103,8 @@ mpi_no_thread_serve_cb(parsec_comm_engine_t *ce, mpi_funnelled_callback_t *cb,
             ret = cb->cb_type.am.fct(ce, mpi_tag, buf, length,
                                      mpi_source, cb->cb_data);
         }
-        /* this is a persistent request, let's reset it if reset variable is ON */
-        if(reset) {
-            /* Let's re-enable the pending request in the same position */
-            MPI_Start(&array_of_requests[cb->storage1]);
-        }
+        /* this is a persistent request, let's reset it */
+        MPI_Start(&array_of_requests[cb->storage1]);
     } else if(cb->type == MPI_FUNNELLED_TYPE_ONESIDED) {
         if(cb->cb_type.onesided.fct != NULL) {
             ret = cb->cb_type.onesided.fct(ce, cb->cb_type.onesided.lreg,
@@ -1224,8 +1208,7 @@ mpi_no_thread_progress(parsec_comm_engine_t *ce)
             /* Serve the callback and comeback */
             mpi_no_thread_serve_cb(ce, cb, status->MPI_TAG,
                                    status->MPI_SOURCE, length,
-                                   MPI_FUNNELLED_TYPE_AM == cb->type ? (cb->tag->am_backend_memory + cb->tag->msg_length * cb->storage2) : NULL,
-                                   1);
+                                   MPI_FUNNELLED_TYPE_AM == cb->type ? (cb->tag->am_backend_memory + cb->tag->msg_length * cb->storage2) : NULL);
             ret++;
         }
 
