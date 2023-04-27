@@ -170,7 +170,7 @@ remote_dep_release_incoming(parsec_execution_stream_t* es,
 
 static int remote_dep_nothread_send(parsec_execution_stream_t* es,
                                     dep_cmd_item_t **head_item);
-static int remote_dep_ce_init(parsec_context_t* context);
+int remote_dep_ce_init(parsec_context_t* context);
 static int remote_dep_ce_fini(parsec_context_t* context);
 
 static int local_dep_nothread_reshape(parsec_execution_stream_t* es,
@@ -189,57 +189,6 @@ static int remote_dep_nothread_memcpy(parsec_execution_stream_t* es,
                                       dep_cmd_item_t *item);
 
 
-/**
- * Store the user provided communicator in the PaRSEC context. We need to make a
- * copy to make sure the communicator does not disappear before the communication
- * engine starts up.
- */
-int remote_dep_set_ctx(parsec_context_t* context, intptr_t opaque_comm_ctx )
-{
-    MPI_Comm comm;
-    int rc;
-
-    /* We can only change the communicator if the communication engine is not active */
-    if( 1 < parsec_communication_engine_up ) {
-        parsec_warning("Cannot change PaRSEC's MPI communicator while the engine is running [ignored]");
-        return PARSEC_ERROR;
-    }
-
-    if( -1 != context->comm_ctx ) {
-#if 0
-        /* Currently, parsec is initialized with comm world.
-         * When checking for congruent communicators, an application changing
-         * the context comm by decreasing and then increasing the number of
-         * processes may lead to processes making different decisions after MPI_Comm_compare
-         * and then deadlocks during MPI_Comm_dup.
-         * E.g. running a taskpool with a subset A of the processes and then
-         * moving to a taskpool including all processes.
-         * Processes in {WORLD - A} have comm_context equal to comm world and
-         * won't set a new comm, thus {A} processes will deadlock on MPI_Comm_dup */
-
-        /* Are we trying to set a congruent communicator a second time? */
-        MPI_Comm_compare((MPI_Comm)context->comm_ctx, (MPI_Comm)opaque_comm_ctx, &rc);
-        if( (MPI_IDENT == rc) || (MPI_CONGRUENT == rc) ) {
-            PARSEC_DEBUG_VERBOSE(20, parsec_comm_output_stream, "Set the same or a congruent communicator. Nothing to do");
-            return PARSEC_SUCCESS;
-        }
-#endif
-        /* Drop the currently used communicator and all other state of the
-         * communication engine */
-        remote_dep_ce_fini(context);
-        assert( -1 == context->comm_ctx );
-    }
-    rc = MPI_Comm_dup((MPI_Comm)opaque_comm_ctx, &comm);
-    context->comm_ctx = (intptr_t)comm;
-    /* We need to know who we are and how many others are there, in order to
-     * correctly initialize the communication engine at the next start. */
-    MPI_Comm_size( (MPI_Comm)context->comm_ctx, (int*)&(context->nb_nodes));
-    MPI_Comm_rank( (MPI_Comm)context->comm_ctx, (int*)&(context->my_rank));
-
-    parsec_taskpool_sync_ids_context(context->comm_ctx);
-
-    return (MPI_SUCCESS == rc) ? PARSEC_SUCCESS : PARSEC_ERROR;
-}
 
 static void remote_dep_mpi_params(parsec_context_t* context) {
     (void)context;
@@ -292,10 +241,13 @@ remote_dep_dequeue_init(parsec_context_t* context)
                        thread_level_support == MPI_THREAD_SINGLE ? "MPI_THREAD_SINGLE" : "MPI_THREAD_FUNNELED");
     }
 
-    if( -1 == context->comm_ctx ) {
-        MPI_Comm_size( MPI_COMM_WORLD, (int*)&(context->nb_nodes));
-        MPI_Comm_rank( MPI_COMM_WORLD, (int*)&(context->my_rank));
-        context->comm_ctx = (intptr_t)MPI_COMM_WORLD;
+    /* Do this first to give a chance to the communication engine to define
+     * who this process is by setting the corresponding info in the
+     * parsec_context.
+     */
+    if( NULL == parsec_comm_engine_init(context) ) {
+        parsec_warning("Communication engine failed to start. Additional information might be available in the corresponding error message");
+        return PARSEC_ERR_NOT_FOUND;
     }
 
     if(parsec_param_comm_thread_multiple) {
@@ -455,9 +407,13 @@ remote_dep_dequeue_off(parsec_context_t* context)
 static void
 remote_dep_mpi_initialize_execution_stream(parsec_context_t *context)
 {
-    memcpy(&parsec_comm_es, context->virtual_processes[0]->execution_streams[0],
-           sizeof(parsec_execution_stream_t));
-    parsec_comm_es.next_task = (parsec_task_t*)0xdeadbeef;  /* should not be NULL, but it should also never be used */
+    parsec_comm_es.th_id            = 0;  /* Pretend to be the master thread */
+    parsec_comm_es.virtual_process  = context->virtual_processes[0];
+    parsec_comm_es.rand_seed        = 0;  /* not random but not used either */
+    parsec_comm_es.scheduler_object = NULL;
+    parsec_comm_es.core_id          = -1;
+    parsec_comm_es.socket_id        = -1;
+    parsec_comm_es.next_task        = (parsec_task_t*)0xdeadbeef;  /* should not be NULL, but it should also never be used */
     if(1 < context->nb_nodes) {
         /* if nb_nodes==1, the parsec comm engine does not run with its own thread, so don't change the thread
          * execution stream to parsec_comm_es. */
@@ -471,6 +427,8 @@ void* remote_dep_dequeue_main(parsec_context_t* context)
 
     remote_dep_bind_thread(context);
     PARSEC_PAPI_SDE_THREAD_INIT();
+
+    remote_dep_ce_init(context);
 
     /* Now synchronize with the main thread */
     pthread_mutex_lock(&mpi_thread_mutex);
@@ -492,7 +450,7 @@ void* remote_dep_dequeue_main(parsec_context_t* context)
         /* The MPI thread is owning the lock */
         assert( parsec_communication_engine_up == 2 );
 
-        remote_dep_mpi_on(context);
+        parsec_ce.enable(&parsec_ce);
         /* acknowledge the activation */
         parsec_communication_engine_up = 3;
 
@@ -1040,7 +998,7 @@ remote_dep_release_incoming(parsec_execution_stream_t* es,
         return origin;
 
     origin->taskpool->tdm.module->incoming_message_end(origin->taskpool, origin);
-    
+
     /**
      * All incoming data are now received, start the propagation. We first
      * release the local dependencies, thus we must ensure the communication
@@ -1276,23 +1234,6 @@ static inline uint64_t remote_dep_mpi_profiling_event_id(void)
 
 #endif  /* PARSEC_PROF_TRACE */
 
-
-int remote_dep_mpi_on(parsec_context_t* context)
-{
-    remote_dep_ce_init(context);
-
-#if defined(PARSEC_PROF_TRACE)
-    /* This is less than ideal, but remote_dep_mpi_setup
-     * holds a mpi_comm_dup() which is often implemented
-     * as a synchronizing routine between the ranks, and
-     * parsec_profiling_start() protects against multiple
-     * calls, so it's the best current place to decide of
-     * a common starting time. */
-    parsec_profiling_start();
-#endif
-
-    return 0;
-}
 
 /**
  * Given a remote_dep_wire_activate message it packs as much as possible
@@ -1797,7 +1738,7 @@ static void remote_dep_mpi_recv_activate(parsec_execution_stream_t* es,
 
     deps->taskpool->tdm.module->incoming_message_start(deps->taskpool, deps->from, packed_buffer, position,
                                                        length, deps);
-        
+
     for(k = 0; deps->incoming_mask>>k; k++) {
         if(!(deps->incoming_mask & (1U<<k))) continue;
         /* Check for CTL and data that do not carry payload */
@@ -2138,7 +2079,7 @@ remote_dep_mpi_get_end_cb(parsec_comm_engine_t *ce,
     return 1;
 }
 
-static int
+int
 remote_dep_ce_init(parsec_context_t* context)
 {
     int rc;
@@ -2147,14 +2088,10 @@ remote_dep_ce_init(parsec_context_t* context)
         /* already fully initialized */
         return 0;
     }
-    /* Do this first to give a chance to the communication engine to define
-     * who this process is by setting the corresponding info in the
-     * parsec_context.
-     */
-    if( NULL == parsec_comm_engine_init(context) ) {
-        parsec_warning("Communication engine failed to start. Additional information might be available in the corresponding error message");
-        return PARSEC_ERR_NOT_FOUND;
-    }
+
+    PARSEC_OBJ_CONSTRUCT(&dep_activates_fifo, parsec_list_t);
+    PARSEC_OBJ_CONSTRUCT(&dep_activates_noobj_fifo, parsec_list_t);
+    PARSEC_OBJ_CONSTRUCT(&dep_put_fifo, parsec_list_t);
 
     /**
      * Finalize the initialization of the upper level structures
@@ -2163,13 +2100,12 @@ remote_dep_ce_init(parsec_context_t* context)
      */
     remote_deps_allocation_init(context->nb_nodes, MAX_PARAM_COUNT);
 
-    PARSEC_OBJ_CONSTRUCT(&dep_activates_fifo, parsec_list_t);
-    PARSEC_OBJ_CONSTRUCT(&dep_activates_noobj_fifo, parsec_list_t);
-    PARSEC_OBJ_CONSTRUCT(&dep_put_fifo, parsec_list_t);
-
     parsec_mpi_same_pos_items_size = context->nb_nodes + (int)DEP_LAST;
     parsec_mpi_same_pos_items = (dep_cmd_item_t**)calloc(parsec_mpi_same_pos_items_size,
                                                         sizeof(dep_cmd_item_t*));
+
+    /* Enable the communication engine */
+    parsec_ce.enable(&parsec_ce);
 
     /* Register Persistant requests */
     rc = parsec_ce.tag_register(PARSEC_CE_REMOTE_DEP_ACTIVATE_TAG, remote_dep_mpi_save_activate_cb, context,

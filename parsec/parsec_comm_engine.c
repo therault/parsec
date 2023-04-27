@@ -24,5 +24,5 @@ int
 parsec_comm_engine_fini(parsec_comm_engine_t *comm_engine)
 {
     /* call the selected module fini */
-    return mpi_funnelled_fini(comm_engine);
+    parsec_ce.fini(&parsec_ce);
 }

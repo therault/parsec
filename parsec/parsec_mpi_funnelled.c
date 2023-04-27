@@ -288,6 +288,12 @@ mpi_funnelled_internal_get_am_callback(parsec_comm_engine_t *ce,
     cb->tag_reg  = NULL;
     cb->type     = MPI_FUNNELLED_TYPE_ONESIDED_MIMIC_AM;
 
+    cb->onesided.fct = NULL;
+    cb->onesided.lreg = remote_memory_handle;
+    cb->onesided.ldispl = 0;
+    cb->onesided.remote = src;
+    cb->onesided.tag = handshake_info->tag;
+
     if(post_in_static_array) {
         mpi_funnelled_last_active_req++;
     } else {
@@ -362,15 +368,15 @@ mpi_funnelled_internal_put_am_callback(parsec_comm_engine_t *ce,
     cb->tag_reg  = NULL;
     cb->type     = MPI_FUNNELLED_TYPE_ONESIDED_MIMIC_AM;
 
+    /* we don't need to initialize anything in the onesided part, we will never send
+     * a message to the peer but instead will only complete the local receive and
+     * trigger the local AM callback.
+     */
     if(post_in_static_array) {
         mpi_funnelled_last_active_req++;
     } else {
         parsec_list_nolock_push_back(&mpi_funnelled_dynamic_req_fifo,
                                      (parsec_list_item_t *)item);
-        /*if(mpi_funnelled_last_active_req < size_of_total_reqs) {
-            assert(mpi_funnelled_last_active_req < size_of_total_reqs);
-            mpi_no_thread_push_posted_req(ce);
-        }*/
     }
 
     return 1;
@@ -399,6 +405,47 @@ int parsec_mpi_sendrecv(parsec_comm_engine_t *ce,
                       parsec_ce_mpi_self_comm, MPI_STATUS_IGNORE);
     (void)ce;
     return (MPI_SUCCESS == rc ? 0 : -1);
+}
+
+/**
+ * Store the user provided communicator in the PaRSEC context. We need to make a
+ * copy to make sure the communicator does not disappear before the communication
+ * engine starts up.
+ * 
+ * This function is collective, all processes in the current and the new communicator
+ * should call it in same time.
+ */
+static int parsec_mpi_set_ctx(parsec_comm_engine_t* ce, intptr_t opaque_comm_ctx )
+{
+    parsec_context_t* context = ce->parsec_context;
+    MPI_Comm comm;
+    int rc;
+
+    /* We can only change the communicator if the communication engine is not active */
+    if( 1 < parsec_communication_engine_up ) {
+        parsec_warning("Cannot change PaRSEC's MPI communicator while the engine is running [ignored]");
+        return PARSEC_ERROR;
+    }
+
+    /* The engine was never yet started, so there is nothing to clean */
+    if( NULL != ce->sync ) {
+        ce->disable(ce);
+        ce->sync(ce);
+        assert( -1 == context->comm_ctx );
+    }
+    rc = MPI_Comm_dup((MPI_Comm)opaque_comm_ctx, &comm);
+    context->comm_ctx = (intptr_t)comm;
+    /* We need to know who we are and how many others are there, in order to
+     * correctly initialize the communication engine at the next start. */
+    MPI_Comm_size( (MPI_Comm)context->comm_ctx, (int*)&(context->nb_nodes));
+    MPI_Comm_rank( (MPI_Comm)context->comm_ctx, (int*)&(context->my_rank));
+
+    /* We might not need a barrier on the new communicator, the communicator
+     * creation is a strong enough synchronization.
+     */
+    parsec_taskpool_sync_ids_context(context->comm_ctx);
+
+    return (MPI_SUCCESS == rc) ? PARSEC_SUCCESS : PARSEC_ERROR;
 }
 
 /**
@@ -460,36 +507,8 @@ mpi_funnelled_init(parsec_context_t *context)
             return NULL;
         }
 
-    /* Did anything changed that would require a build of the management structures? */
-    assert(-1 != context->comm_ctx);
-    if(parsec_ce_mpi_comm == (MPI_Comm)context->comm_ctx) {
-        return &parsec_ce;
-    }
     PARSEC_DEBUG_VERBOSE(10, parsec_comm_output_stream, "rank %d ENABLE MPI communication engine",
                          parsec_debug_rank);
-
-    MPI_Comm_dup((MPI_Comm) context->comm_ctx, &parsec_ce_mpi_comm);
-    for(i = 0; i < PARSEC_MAX_REGISTERED_TAGS; i++) {
-        MPI_Comm_dup((MPI_Comm) context->comm_ctx, &parsec_ce_mpi_am_comm[i]);
-    }
-    /* Replace the provided communicator with a pointer to the PaRSEC duplicate */
-    context->comm_ctx = (uintptr_t)parsec_ce_mpi_comm;
-
-    parsec_check_overlapping_binding(context);
-
-#if defined(PARSEC_HAVE_MPI_OVERTAKE)
-    if( parsec_param_enable_mpi_overtake ) {
-        MPI_Info no_order;
-        MPI_Info_create(&no_order);
-        MPI_Info_set(no_order, "mpi_assert_allow_overtaking", "true");
-        MPI_Comm_set_info(parsec_ce_mpi_comm, no_order);
-        MPI_Info_free(&no_order);
-    }
-    /* There is no need to enable overtake for the AM communicator */
-#endif
-
-    MPI_Comm_size(parsec_ce_mpi_comm, &(context->nb_nodes));
-    MPI_Comm_rank(parsec_ce_mpi_comm, &(context->my_rank));
 
     for(i = 0; i < PARSEC_MAX_REGISTERED_TAGS; i++) {
         parsec_mpi_funnelled_array_of_registered_tags[i].am_backend_memory = NULL;
@@ -497,43 +516,41 @@ mpi_funnelled_init(parsec_context_t *context)
         parsec_mpi_funnelled_array_of_registered_tags[i].status = PARSEC_CE_TAG_STATUS_INACTIVE;
     }
 
-    /* Initialize the arrays */
-    array_of_callbacks = (mpi_funnelled_callback_t *) calloc(MAX_DYNAMIC_REQ_RANGE,
-                            sizeof(mpi_funnelled_callback_t));
-    array_of_requests  = (MPI_Request *) calloc(MAX_DYNAMIC_REQ_RANGE, sizeof(MPI_Request));
-    array_of_indices   = (int *) calloc(MAX_DYNAMIC_REQ_RANGE, sizeof(int));
-    array_of_statuses  = (MPI_Status *) calloc(MAX_DYNAMIC_REQ_RANGE, sizeof(MPI_Status));
+    size_of_total_reqs = MAX_DYNAMIC_REQ_RANGE;
 
-    for(i = 0; i < MAX_DYNAMIC_REQ_RANGE; i++) {
-        array_of_requests[i] = MPI_REQUEST_NULL;
-    }
-
-    size_of_total_reqs += MAX_DYNAMIC_REQ_RANGE;
-
-    /* Make all the fn pointers point to this component's function */
-    parsec_ce.tag_register        = mpi_no_thread_tag_register;
-    parsec_ce.tag_unregister      = mpi_no_thread_tag_unregister;
-    parsec_ce.mem_register        = mpi_no_thread_mem_register;
-    parsec_ce.mem_unregister      = mpi_no_thread_mem_unregister;
-    parsec_ce.get_mem_handle_size = mpi_no_thread_get_mem_reg_handle_size;
-    parsec_ce.mem_retrieve        = mpi_no_thread_mem_retrieve;
-    parsec_ce.put                 = mpi_no_thread_put;
-    parsec_ce.get                 = mpi_no_thread_get;
-    parsec_ce.progress            = mpi_no_thread_progress;
+     /* Make all the fn pointers point to this component's function */
     parsec_ce.enable              = mpi_no_thread_enable;
     parsec_ce.disable             = mpi_no_thread_disable;
-    parsec_ce.pack                = mpi_no_thread_pack;
-    parsec_ce.pack_size           = mpi_no_thread_pack_size;
-    parsec_ce.unpack              = mpi_no_thread_unpack;
-    parsec_ce.sync                = mpi_no_thread_sync;
-    parsec_ce.reshape             = parsec_mpi_sendrecv;
-    parsec_ce.can_serve           = mpi_no_thread_can_push_more;
-    parsec_ce.send_am             = mpi_no_thread_send_active_message;
+    parsec_ce.set_ctx             = parsec_mpi_set_ctx;
+    parsec_ce.fini                = mpi_funnelled_fini;
+    parsec_ce.tag_register        = mpi_no_thread_tag_register;
+    parsec_ce.tag_unregister      = mpi_no_thread_tag_unregister;
+    parsec_ce.mem_register        = NULL;
+    parsec_ce.mem_unregister      = NULL;
+    parsec_ce.get_mem_handle_size = NULL;
+    parsec_ce.mem_retrieve        = NULL;
+    parsec_ce.put                 = NULL;
+    parsec_ce.get                 = NULL;
+    parsec_ce.progress            = NULL;
+    parsec_ce.pack                = NULL;
+    parsec_ce.pack_size           = NULL;
+    parsec_ce.unpack              = NULL;
+    parsec_ce.sync                = NULL;
+    parsec_ce.reshape             = NULL;
+    parsec_ce.can_serve           = NULL;
+    parsec_ce.send_am             = NULL;
 
     parsec_ce.parsec_context      = context;
     parsec_ce.capabilites.sided   = 2;
     parsec_ce.capabilites.supports_noncontiguous_datatype = 1;
 
+    /* Define some sensible values. We assume the application will initialize PaRSEC using
+     * the entire MPI_COMM_WORLD, but we need to prepare some decent default values. */
+    if( -1 == context->comm_ctx ) {
+        MPI_Comm_size( MPI_COMM_WORLD, (int*)&(context->nb_nodes));
+        MPI_Comm_rank( MPI_COMM_WORLD, (int*)&(context->my_rank));
+        context->comm_ctx = (intptr_t)MPI_COMM_WORLD;
+    }
     /* Register for internal GET and PUT AMs */
     parsec_ce.tag_register(PARSEC_CE_MPI_FUNNELLED_GET_TAG_INTERNAL,
                            mpi_funnelled_internal_get_am_callback,
@@ -544,20 +561,6 @@ mpi_funnelled_init(parsec_context_t *context)
                            mpi_funnelled_internal_put_am_callback,
                            context,
                            4096);
-
-    PARSEC_OBJ_CONSTRUCT(&mpi_funnelled_dynamic_req_fifo, parsec_list_t);
-
-    mpi_funnelled_mem_reg_handle_mempool = (parsec_mempool_t*) malloc (sizeof(parsec_mempool_t));
-    parsec_mempool_construct(mpi_funnelled_mem_reg_handle_mempool,
-                             PARSEC_OBJ_CLASS(mpi_funnelled_mem_reg_handle_t), sizeof(mpi_funnelled_mem_reg_handle_t),
-                             offsetof(mpi_funnelled_mem_reg_handle_t, mempool_owner),
-                             1);
-
-    mpi_funnelled_dynamic_req_mempool = (parsec_mempool_t*) malloc (sizeof(parsec_mempool_t));
-    parsec_mempool_construct(mpi_funnelled_dynamic_req_mempool,
-                             PARSEC_OBJ_CLASS(mpi_funnelled_dynamic_req_t), sizeof(mpi_funnelled_dynamic_req_t),
-                             offsetof(mpi_funnelled_dynamic_req_t, mempool_owner),
-                             1);
 
     return &parsec_ce;
 }
@@ -693,11 +696,9 @@ static int parsec_ce_rebuild_am_requests(void)
             continue;
         }
         if( tag_struct->status == PARSEC_CE_TAG_STATUS_ACTIVE ) {
-            memcpy(tmp_array_cb + idx * sizeof(mpi_funnelled_callback_t),
-                   array_of_callbacks + old_idx * sizeof(mpi_funnelled_callback_t),
+            memcpy(&tmp_array_cb[idx], &array_of_callbacks[old_idx],
                    sizeof(mpi_funnelled_callback_t) * EACH_STATIC_REQ_RANGE);
-            memcpy(tmp_array_req + idx * sizeof(MPI_Request),
-                   array_of_requests + old_idx * sizeof(MPI_Request),
+            memcpy(&tmp_array_req[idx], &array_of_requests[old_idx],
                    sizeof(MPI_Request) * EACH_STATIC_REQ_RANGE);
             idx     += EACH_STATIC_REQ_RANGE;
             old_idx += EACH_STATIC_REQ_RANGE;
@@ -1153,10 +1154,10 @@ mpi_no_thread_progress(parsec_comm_engine_t *ce)
     mpi_funnelled_callback_t *cb;
     int length;
 
+    if(parsec_ce_am_build_version != parsec_ce_am_design_version) {
+        parsec_ce_rebuild_am_requests();
+    }
     do {
-        if(parsec_ce_am_build_version != parsec_ce_am_design_version) {
-            parsec_ce_rebuild_am_requests();
-        }
         MPI_Testsome(mpi_funnelled_last_active_req, array_of_requests,
                      &outcount, array_of_indices, array_of_statuses);
 
@@ -1201,10 +1202,159 @@ mpi_no_thread_progress(parsec_comm_engine_t *ce)
     } while(1);
 }
 
+/**
+ * @brief Check that the binding is correct. However, this operation is extremely expensive
+ *        and highly not scalable so we should only do this operation when really necessary.
+ * 
+ * @param context 
+ * @return int SUCCESS if the global bindings are OK, error otherwise.
+ */
+static int
+parsec_check_overlapping_binding(parsec_context_t *context)
+{
+#if defined(DISTRIBUTED) && defined(PARSEC_HAVE_MPI) && defined(PARSEC_HAVE_HWLOC) && defined(PARSEC_HAVE_HWLOC_BITMAP)
+    if( context->nb_nodes <= parsec_slow_bind_warning ) {
+        MPI_Comm comml = MPI_COMM_NULL; int i, nl = 0, rl = MPI_PROC_NULL;
+        MPI_Comm commw = (MPI_Comm)context->comm_ctx;
+        assert(-1 != context->comm_ctx);
+        MPI_Comm_split_type(commw, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &comml);
+        MPI_Comm_size(comml, &nl);
+        if( 1 < nl ) {
+            /* Hu-ho, double check that our binding is not conflicting with other
+             * local procs */
+            MPI_Comm_rank(comml, &rl);
+            char *myset = NULL, *allsets = NULL;
+
+            if( 0 != hwloc_bitmap_list_asprintf(&myset, context->cpuset_allowed_mask) ) {
+            }
+            int setlen = strlen(myset);
+            int *setlens = NULL;
+            if( 0 == rl ) {
+                setlens = calloc(nl, sizeof(int));
+            }
+            MPI_Gather(&setlen, 1, MPI_INT, setlens, 1, MPI_INT, 0, comml);
+
+            int *displs = NULL;
+            if( 0 == rl ) {
+                displs = calloc(nl, sizeof(int));
+                displs[0] = 0;
+                for( i = 1; i < nl; i++ ) {
+                    displs[i] = displs[i-1]+setlens[i-1];
+                }
+                allsets = calloc(displs[nl-1]+setlens[nl-1], sizeof(char));
+            }
+            MPI_Gatherv(myset, setlen, MPI_CHAR, allsets, setlens, displs, MPI_CHAR, 0, comml);
+            free(myset);
+
+            if( 0 == rl ) {
+                int notgood = false;
+                for( i = 1; i < nl; i++ ) {
+                    hwloc_bitmap_t other = hwloc_bitmap_alloc();
+                    hwloc_bitmap_list_sscanf(other, &allsets[displs[i]]);
+                    if(hwloc_bitmap_intersects(context->cpuset_allowed_mask, other)) {
+                        notgood = true;
+                    }
+                    hwloc_bitmap_free(other);
+                }
+                if( notgood ) {
+                    parsec_warning("/!\\ PERFORMANCE MIGHT BE REDUCED /!\\: "
+                                   "Multiple PaRSEC processes on the same node may share the same physical core(s);\n"
+                                    "\tThis is often unintentional, and will perform poorly.\n"
+                                   "\tNote that in managed environments (e.g., ALPS, jsrun), the launcher may set `cgroups`\n"
+                                   "\tand hide the real binding from PaRSEC; if you verified that the binding is correct,\n"
+                                   "\tthis message can be silenced using the MCA argument `runtime_warn_slow_binding`.\n");
+                }
+                free(setlens);
+                free(allsets);
+                free(displs);
+            }
+        }
+    }
+    return PARSEC_SUCCESS;
+#else
+    (void)context;
+    return PARSEC_ERR_NOT_IMPLEMENTED;
+#endif
+}
+
 int
 mpi_no_thread_enable(parsec_comm_engine_t *ce)
 {
-    (void) ce;
+    parsec_context_t *context = ce->parsec_context;
+    int i;
+
+    /* Did anything changed that would require a reconstruction of the management structures? */
+    assert(-1 != context->comm_ctx);
+    if(parsec_ce_mpi_comm == (MPI_Comm)context->comm_ctx) {
+        return PARSEC_SUCCESS;
+    }
+    /* Finish the initialization of the communication engine */
+    parsec_ce.mem_register        = mpi_no_thread_mem_register;
+    parsec_ce.mem_unregister      = mpi_no_thread_mem_unregister;
+    parsec_ce.get_mem_handle_size = mpi_no_thread_get_mem_reg_handle_size;
+    parsec_ce.mem_retrieve        = mpi_no_thread_mem_retrieve;
+    parsec_ce.put                 = mpi_no_thread_put;
+    parsec_ce.get                 = mpi_no_thread_get;
+    parsec_ce.progress            = mpi_no_thread_progress;
+    parsec_ce.pack                = mpi_no_thread_pack;
+    parsec_ce.pack_size           = mpi_no_thread_pack_size;
+    parsec_ce.unpack              = mpi_no_thread_unpack;
+    parsec_ce.sync                = mpi_no_thread_sync;
+    parsec_ce.reshape             = parsec_mpi_sendrecv;
+    parsec_ce.can_serve           = mpi_no_thread_can_push_more;
+    parsec_ce.send_am             = mpi_no_thread_send_active_message;
+
+    /* Initialize the arrays */
+    array_of_callbacks = (mpi_funnelled_callback_t *) calloc(MAX_DYNAMIC_REQ_RANGE,
+                            sizeof(mpi_funnelled_callback_t));
+    array_of_requests  = (MPI_Request *) calloc(MAX_DYNAMIC_REQ_RANGE, sizeof(MPI_Request));
+    array_of_indices   = (int *) calloc(MAX_DYNAMIC_REQ_RANGE, sizeof(int));
+    array_of_statuses  = (MPI_Status *) calloc(MAX_DYNAMIC_REQ_RANGE, sizeof(MPI_Status));
+
+    for(i = 0; i < MAX_DYNAMIC_REQ_RANGE; i++) {
+        array_of_requests[i] = MPI_REQUEST_NULL;
+    }
+
+    PARSEC_OBJ_CONSTRUCT(&mpi_funnelled_dynamic_req_fifo, parsec_list_t);
+
+    mpi_funnelled_mem_reg_handle_mempool = (parsec_mempool_t*) malloc (sizeof(parsec_mempool_t));
+    parsec_mempool_construct(mpi_funnelled_mem_reg_handle_mempool,
+                             PARSEC_OBJ_CLASS(mpi_funnelled_mem_reg_handle_t), sizeof(mpi_funnelled_mem_reg_handle_t),
+                             offsetof(mpi_funnelled_mem_reg_handle_t, mempool_owner),
+                             1);
+
+    mpi_funnelled_dynamic_req_mempool = (parsec_mempool_t*) malloc (sizeof(parsec_mempool_t));
+    parsec_mempool_construct(mpi_funnelled_dynamic_req_mempool,
+                             PARSEC_OBJ_CLASS(mpi_funnelled_dynamic_req_t), sizeof(mpi_funnelled_dynamic_req_t),
+                             offsetof(mpi_funnelled_dynamic_req_t, mempool_owner),
+                             1);
+
+    MPI_Comm_dup((MPI_Comm) context->comm_ctx, &parsec_ce_mpi_comm);
+    for(i = 0; i < PARSEC_MAX_REGISTERED_TAGS; i++) {
+        MPI_Comm_dup((MPI_Comm) context->comm_ctx, &parsec_ce_mpi_am_comm[i]);
+    }
+    /* Replace the provided communicator with a pointer to the PaRSEC duplicate */
+    context->comm_ctx = (uintptr_t)parsec_ce_mpi_comm;
+
+    MPI_Comm_size(parsec_ce_mpi_comm, &(context->nb_nodes));
+    MPI_Comm_rank(parsec_ce_mpi_comm, &(context->my_rank));
+
+    parsec_check_overlapping_binding(context);
+
+#if defined(PARSEC_HAVE_MPI_OVERTAKE)
+    if( parsec_param_enable_mpi_overtake ) {
+        MPI_Info no_order;
+        MPI_Info_create(&no_order);
+        MPI_Info_set(no_order, "mpi_assert_allow_overtaking", "true");
+        MPI_Comm_set_info(parsec_ce_mpi_comm, no_order);
+        MPI_Info_free(&no_order);
+    }
+    /* There is no need to enable overtake for the AM communicator */
+#endif
+
+    if(parsec_ce_am_build_version != parsec_ce_am_design_version) {
+        parsec_ce_rebuild_am_requests();
+    }
     return 1;
 }
 
