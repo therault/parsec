@@ -2164,10 +2164,12 @@ int remote_dep_ce_fini(parsec_context_t* context)
         parsec_mpi_same_pos_items_size = 0;
     }
 
-    PARSEC_OBJ_DESTRUCT(&dep_activates_fifo);
-    PARSEC_OBJ_DESTRUCT(&dep_activates_noobj_fifo);
-    PARSEC_OBJ_DESTRUCT(&dep_put_fifo);
-
+    if( NULL != parsec_ce.send_am ) {
+        PARSEC_OBJ_DESTRUCT(&dep_activates_fifo);
+        PARSEC_OBJ_DESTRUCT(&dep_activates_noobj_fifo);
+        PARSEC_OBJ_DESTRUCT(&dep_put_fifo);
+    }
+    
     return 0;
 }
 
