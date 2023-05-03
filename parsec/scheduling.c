@@ -395,6 +395,12 @@ int __parsec_schedule_vp(parsec_execution_stream_t* es,
                 }
             }
             target_es = es;
+            if(target_es == &parsec_comm_es) {
+                static int rr = 0;
+                if( rr >= vps[vp]->nb_cores ) rr = 0;
+                target_es = vps[vp]->execution_streams[rr];
+                rr = rr+1 % vps[vp]->nb_cores;
+            }
         }
         ret = __parsec_schedule(target_es, ring, distance);
         if( 0 != ret )
