@@ -171,7 +171,6 @@ remote_dep_release_incoming(parsec_execution_stream_t* es,
 static int remote_dep_nothread_send(parsec_execution_stream_t* es,
                                     dep_cmd_item_t **head_item);
 int remote_dep_ce_init(parsec_context_t* context);
-static int remote_dep_ce_fini(parsec_context_t* context);
 
 static int local_dep_nothread_reshape(parsec_execution_stream_t* es,
                                       dep_cmd_item_t *item);
@@ -188,6 +187,7 @@ static void remote_dep_mpi_release_delayed_deps(parsec_execution_stream_t* es,
 static int remote_dep_nothread_memcpy(parsec_execution_stream_t* es,
                                       dep_cmd_item_t *item);
 
+int remote_dep_ce_reconfigure(parsec_context_t* context);
 
 
 static void remote_dep_mpi_params(parsec_context_t* context) {
@@ -228,7 +228,7 @@ remote_dep_dequeue_init(parsec_context_t* context)
         parsec_fatal("MPI was not initialized. This version of PaRSEC was compiled with MPI datatype supports and *needs* MPI to execute.\n"
                      "\t* Please initialized MPI in the application (MPI_Init/MPI_Init_thread) prior to initializing PaRSEC.\n"
                      "\t* Alternatively, compile a version of PaRSEC without MPI (-DPARSEC_DIST_WITH_MPI=OFF in ccmake)\n");
-        return 1;
+        return PARSEC_SUCCESS;
     }
     parsec_communication_engine_up = 0;  /* we have communication capabilities */
 
@@ -294,8 +294,9 @@ remote_dep_dequeue_init(parsec_context_t* context)
     pthread_cond_wait( &mpi_thread_condition, &mpi_thread_mutex );
   up_and_running:
     mpi_initialized = 1;  /* up and running */
+    remote_dep_ce_init(context);
 
-    return context->nb_nodes;
+    return PARSEC_SUCCESS;
 }
 
 int
@@ -304,7 +305,7 @@ remote_dep_dequeue_fini(parsec_context_t* context)
     if( 0 == mpi_initialized ) return 0;
 
     /**
-     * We suppose the off function was called before. Then we will append a
+     * We suppose the disable function was called before. Then we will append a
      * shutdown command in the MPI thread queue, and wake the MPI thread. Upon
      * processing of the pending command the MPI thread will exit, we will be
      * able to catch this by locking the mutex.  Once we know the MPI thread is
@@ -325,9 +326,6 @@ remote_dep_dequeue_fini(parsec_context_t* context)
         pthread_mutex_unlock(&mpi_thread_mutex);
         pthread_join(dep_thread_id, &ret);
         assert((parsec_context_t*)ret == context);
-    }
-    else if ( parsec_communication_engine_up == 1 ) {
-        remote_dep_ce_fini(context);
     }
 
     assert(NULL == parsec_dequeue_pop_front(&dep_cmd_queue));
@@ -414,11 +412,6 @@ remote_dep_mpi_initialize_execution_stream(parsec_context_t *context)
     parsec_comm_es.core_id          = -1;
     parsec_comm_es.socket_id        = -1;
     parsec_comm_es.next_task        = (parsec_task_t*)0xdeadbeef;  /* should not be NULL, but it should also never be used */
-    if(1 < context->nb_nodes) {
-        /* if nb_nodes==1, the parsec comm engine does not run with its own thread, so don't change the thread
-         * execution stream to parsec_comm_es. */
-        parsec_set_my_execution_stream(&parsec_comm_es);
-    }
 }
 
 void* remote_dep_dequeue_main(parsec_context_t* context)
@@ -427,8 +420,6 @@ void* remote_dep_dequeue_main(parsec_context_t* context)
 
     remote_dep_bind_thread(context);
     PARSEC_PAPI_SDE_THREAD_INIT();
-
-    remote_dep_ce_init(context);
 
     /* Now synchronize with the main thread */
     pthread_mutex_lock(&mpi_thread_mutex);
@@ -451,6 +442,9 @@ void* remote_dep_dequeue_main(parsec_context_t* context)
         assert( parsec_communication_engine_up == 2 );
 
         parsec_ce.enable(&parsec_ce);
+        remote_dep_ce_reconfigure(context);
+        parsec_remote_dep_reconfigure(context);
+
         /* acknowledge the activation */
         parsec_communication_engine_up = 3;
 
@@ -460,8 +454,7 @@ void* remote_dep_dequeue_main(parsec_context_t* context)
         parsec_communication_engine_up = 1;  /* went to sleep */
     }
 
-    /* Release all resources */
-    remote_dep_ce_fini(context);
+    /* Release resources */
     PARSEC_PAPI_SDE_THREAD_FINI();
 
     return (void*)context;
@@ -2079,20 +2072,21 @@ remote_dep_mpi_get_end_cb(parsec_comm_engine_t *ce,
     return 1;
 }
 
-int
-remote_dep_ce_init(parsec_context_t* context)
+/**
+ * @brief Called in the context of the communication thread once a change in the
+ * configuration has been noticed. This allows the full reconfiguration of the
+ * communication engine, including the allocation of the necessary structures on
+ * the correct memory node.
+ * 
+ * @param context 
+ * @return int mostly PARSEC_SUCCESS
+ */
+int remote_dep_ce_reconfigure(parsec_context_t* context)
 {
-    int rc;
-
-    if( NULL != parsec_remote_dep_cb_data_mempool ) {
-        /* already fully initialized */
-        return 0;
+    if( NULL != parsec_mpi_same_pos_items ) {
+        free(parsec_mpi_same_pos_items); parsec_mpi_same_pos_items = NULL;
+        parsec_mpi_same_pos_items_size = 0;
     }
-
-    PARSEC_OBJ_CONSTRUCT(&dep_activates_fifo, parsec_list_t);
-    PARSEC_OBJ_CONSTRUCT(&dep_activates_noobj_fifo, parsec_list_t);
-    PARSEC_OBJ_CONSTRUCT(&dep_put_fifo, parsec_list_t);
-
     /**
      * Finalize the initialization of the upper level structures
      * Worst case: one of the DAGs is going to use up to
@@ -2101,11 +2095,28 @@ remote_dep_ce_init(parsec_context_t* context)
     remote_deps_allocation_init(context->nb_nodes, MAX_PARAM_COUNT);
 
     parsec_mpi_same_pos_items_size = context->nb_nodes + (int)DEP_LAST;
+    assert( NULL == parsec_mpi_same_pos_items );
     parsec_mpi_same_pos_items = (dep_cmd_item_t**)calloc(parsec_mpi_same_pos_items_size,
                                                         sizeof(dep_cmd_item_t*));
 
-    /* Enable the communication engine */
-    parsec_ce.enable(&parsec_ce);
+    if(1 < context->nb_nodes) {
+        /* if nb_nodes==1, the parsec comm engine does not run with its own thread, so don't change the thread
+         * execution stream to parsec_comm_es. */
+        parsec_set_my_execution_stream(&parsec_comm_es);
+    }
+    return PARSEC_SUCCESS;
+}
+
+int
+remote_dep_ce_init(parsec_context_t* context)
+{
+    int rc;
+
+    assert(NULL == parsec_remote_dep_cb_data_mempool);
+
+    PARSEC_OBJ_CONSTRUCT(&dep_activates_fifo, parsec_list_t);
+    PARSEC_OBJ_CONSTRUCT(&dep_activates_noobj_fifo, parsec_list_t);
+    PARSEC_OBJ_CONSTRUCT(&dep_put_fifo, parsec_list_t);
 
     /* Register Persistant requests */
     rc = parsec_ce.tag_register(PARSEC_CE_REMOTE_DEP_ACTIVATE_TAG, remote_dep_mpi_save_activate_cb, context,
@@ -2131,13 +2142,11 @@ remote_dep_ce_init(parsec_context_t* context)
                              1);
     /* Lazy or delayed initializations */
     remote_dep_mpi_initialize_execution_stream(context);
-
     remote_dep_mpi_profiling_init();
-    return 0;
+    return PARSEC_SUCCESS;
 }
 
-static int
-remote_dep_ce_fini(parsec_context_t* context)
+int remote_dep_ce_fini(parsec_context_t* context)
 {
     remote_dep_mpi_profiling_fini();
 
@@ -2146,19 +2155,19 @@ remote_dep_ce_fini(parsec_context_t* context)
     parsec_ce.tag_unregister(PARSEC_CE_REMOTE_DEP_GET_DATA_TAG);
     //parsec_ce.tag_unregister(PARSEC_CE_REMOTE_DEP_PUT_END_TAG);
 
-    parsec_mempool_destruct(parsec_remote_dep_cb_data_mempool);
-    free(parsec_remote_dep_cb_data_mempool); parsec_remote_dep_cb_data_mempool = NULL;
-
-    free(parsec_mpi_same_pos_items); parsec_mpi_same_pos_items = NULL;
-    parsec_mpi_same_pos_items_size = 0;
+    if( NULL != parsec_remote_dep_cb_data_mempool ) {
+        parsec_mempool_destruct(parsec_remote_dep_cb_data_mempool);
+        free(parsec_remote_dep_cb_data_mempool); parsec_remote_dep_cb_data_mempool = NULL;
+    }
+    if( NULL != parsec_mpi_same_pos_items ) {
+        free(parsec_mpi_same_pos_items); parsec_mpi_same_pos_items = NULL;
+        parsec_mpi_same_pos_items_size = 0;
+    }
 
     PARSEC_OBJ_DESTRUCT(&dep_activates_fifo);
     PARSEC_OBJ_DESTRUCT(&dep_activates_noobj_fifo);
     PARSEC_OBJ_DESTRUCT(&dep_put_fifo);
 
-    parsec_comm_engine_fini(&parsec_ce);
-
-    (void)context;
     return 0;
 }
 

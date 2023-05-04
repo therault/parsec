@@ -194,11 +194,11 @@ static void __parsec_taskpool_constructor(parsec_taskpool_t* tp)
 
 static void __parsec_taskpool_destructor(parsec_taskpool_t* tp)
 {
-    if( NULL != tp->taskpool_name ) {
-        free(tp->taskpool_name);
-    }
     if( NULL != tp->context ) {
         parsec_context_remove_taskpool(tp);
+    }
+    if( NULL != tp->taskpool_name ) {
+        free(tp->taskpool_name);
     }
 }
 
@@ -1142,7 +1142,6 @@ int parsec_fini( parsec_context_t** pcontext )
     if( __parsec_dtd_is_initialized ) {
         parsec_dtd_fini();
     }
-    //TODO: check that the list is empty in debug mode
     PARSEC_OBJ_RELEASE(context->taskpool_list);
     context->taskpool_list = NULL;
     nb_items = 0;
@@ -1218,9 +1217,9 @@ int parsec_fini( parsec_context_t** pcontext )
 
     (void) parsec_termdet_fini();
 
-    (void) parsec_remote_dep_fini(context);
+    (void)parsec_comm_engine_fini(&parsec_ce);
 
-    parsec_remove_scheduler( context );
+    parsec_remove_scheduler(context);
 
     parsec_data_fini(context);
 

@@ -235,6 +235,9 @@ void parsec_remote_dep_memcpy(parsec_execution_stream_t* es,
  */
 int remote_dep_dequeue_delayed_dep_release(parsec_remote_deps_t *deps);
 
+/* Reconfigure the remote_dep part of the communication engine */
+int parsec_remote_dep_reconfigure(parsec_context_t* context);
+
 #if defined(PARSEC_DIST_COLLECTIVES)
 /* Propagate an activation order from the current node down the original tree */
 int parsec_remote_dep_propagate(parsec_execution_stream_t* es,

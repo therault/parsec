@@ -222,15 +222,6 @@ inline void remote_deps_free(parsec_remote_deps_t* deps)
 
 #endif
 
-#if 0
-#ifdef PARSEC_HAVE_MPI
-#include "remote_dep_mpi.c"
-
-#else
-#endif /* NO TRANSPORT */
-
-#endif
-
 #ifdef DISTRIBUTED
 
 #include "parsec/utils/mca_param.h"
@@ -294,10 +285,23 @@ int parsec_remote_dep_init(parsec_context_t* context)
     (void)remote_dep_dequeue_init(context);
 
     context->remote_dep_fw_mask_sizeof = 0;
+
+    return PARSEC_SUCCESS;
+}
+
+/**
+ * @brief This function is called by the progress thread every time a change in
+ * the execution context is noticed. As an example when the user change the
+ * distributed context via parsec_remote_dep_set_ctx.
+ * 
+ * @param context The updated context where the change has been noted.
+ * @return int mostly PARSEC_SUCCESS
+ */
+int parsec_remote_dep_reconfigure(parsec_context_t* context)
+{
     if(context->nb_nodes > 1)
         context->remote_dep_fw_mask_sizeof = ((context->nb_nodes + 31) / 32) * sizeof(uint32_t);
-
-    return context->nb_nodes;
+    return PARSEC_SUCCESS;
 }
 
 int parsec_remote_dep_fini(parsec_context_t* context)

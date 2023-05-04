@@ -431,10 +431,12 @@ static int parsec_mpi_set_ctx(parsec_comm_engine_t* ce, intptr_t opaque_comm_ctx
     if( NULL != ce->sync ) {
         ce->disable(ce);
         ce->sync(ce);
-        assert( -1 == context->comm_ctx );
+        assert( -1 != context->comm_ctx );
+        MPI_Comm_free((MPI_Comm*)&context->comm_ctx);
     }
     rc = MPI_Comm_dup((MPI_Comm)opaque_comm_ctx, &comm);
     context->comm_ctx = (intptr_t)comm;
+    parsec_ce_am_design_version++;  /* signal need for update */
     /* We need to know who we are and how many others are there, in order to
      * correctly initialize the communication engine at the next start. */
     MPI_Comm_size( (MPI_Comm)context->comm_ctx, (int*)&(context->nb_nodes));
@@ -669,7 +671,7 @@ static int parsec_ce_rebuild_am_requests(void)
 {
     mpi_funnelled_callback_t* cb;
 
-    if( size_of_total_reqs == current_size_of_total_reqs ) {
+    if(parsec_ce_am_build_version == parsec_ce_am_design_version) {
         /* There is nothing to update, the engine is ready to rock */
         return PARSEC_SUCCESS;
     }
@@ -1154,9 +1156,6 @@ mpi_no_thread_progress(parsec_comm_engine_t *ce)
     mpi_funnelled_callback_t *cb;
     int length;
 
-    if(parsec_ce_am_build_version != parsec_ce_am_design_version) {
-        parsec_ce_rebuild_am_requests();
-    }
     do {
         MPI_Testsome(mpi_funnelled_last_active_req, array_of_requests,
                      &outcount, array_of_indices, array_of_statuses);
@@ -1352,9 +1351,7 @@ mpi_no_thread_enable(parsec_comm_engine_t *ce)
     /* There is no need to enable overtake for the AM communicator */
 #endif
 
-    if(parsec_ce_am_build_version != parsec_ce_am_design_version) {
-        parsec_ce_rebuild_am_requests();
-    }
+    parsec_ce_rebuild_am_requests();
     return 1;
 }
 
