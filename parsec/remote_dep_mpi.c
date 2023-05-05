@@ -2178,7 +2178,7 @@ int remote_dep_ce_fini(parsec_context_t* context)
         PARSEC_OBJ_DESTRUCT(&dep_activates_noobj_fifo);
         PARSEC_OBJ_DESTRUCT(&dep_put_fifo);
     }
-    
+
     return 0;
 }
 
