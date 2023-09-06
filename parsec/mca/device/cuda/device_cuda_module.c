@@ -1294,13 +1294,25 @@ parsec_gpu_data_stage_in( parsec_device_cuda_module_t* cuda_device,
 
     transfer_from = parsec_data_start_transfer_ownership_to_copy(original, gpu_device->super.device_index, (uint8_t)type);
 
-    if( PARSEC_FLOW_ACCESS_WRITE & type && gpu_task->task_type != PARSEC_GPU_TASK_TYPE_PREFETCH ) {
-        gpu_elem->version++;  /* on to the next version */
-        PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
-                             "GPU[%s]: GPU copy %p [ref_count %d] increments version to %d at %s:%d",
-                             gpu_device->super.name,
-                             gpu_elem, gpu_elem->super.super.obj_reference_count, gpu_elem->version,
-                             __FILE__, __LINE__);
+    if( gpu_task->task_type != PARSEC_GPU_TASK_TYPE_PREFETCH) {
+        if(-1 != transfer_from) {
+            gpu_elem->version = candidate->version;
+            PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
+                                "GPU[%s]: GPU copy %p [ref_count %d] will come from device %d. It gets the same version %d as its source, copy %p [ref count %d] at %s:%d",
+                                gpu_device->super.name, 
+                                gpu_elem, gpu_elem->super.super.obj_reference_count, 
+                                candidate->device_index, gpu_elem->version,
+                                candidate, candidate->super.super.obj_reference_count,
+                                __FILE__, __LINE__);
+        }
+        if( PARSEC_FLOW_ACCESS_WRITE & type ) {
+                gpu_elem->version++;  /* on to the next version */
+                PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
+                                    "GPU[%s]: GPU copy %p [ref_count %d] increments version to %d because the task has WRITE access at %s:%d",
+                                    gpu_device->super.name, 
+                                    gpu_elem, gpu_elem->super.super.obj_reference_count, gpu_elem->version,
+                                    __FILE__, __LINE__);
+        }
     }
 
     /* If data is from NEW (it doesn't have a source_repo_entry and is not a direct data collection reference), 
@@ -1413,8 +1425,6 @@ parsec_gpu_data_stage_in( parsec_device_cuda_module_t* cuda_device,
                          candidate_dev->super.super.device_index, candidate->version, (void*)candidate->device_private, candidate, candidate->super.super.obj_reference_count,
                          gpu_device->super.device_index, gpu_elem->version, (void*)gpu_elem->device_private);
 
-    assert((gpu_elem->version < candidate->version) || (gpu_elem->data_transfer_status == PARSEC_DATA_STATUS_NOT_TRANSFER));
-
 #if defined(PARSEC_PROF_TRACE)
     if( gpu_stream->prof_event_track_enable  ) {
         parsec_profile_data_collection_info_t info;
@@ -1481,15 +1491,6 @@ parsec_gpu_data_stage_in( parsec_device_cuda_module_t* cuda_device,
     gpu_device->super.data_in_from_device[candidate_dev->super.super.device_index] += nb_elts;
     if( PARSEC_GPU_TASK_TYPE_KERNEL == gpu_task->task_type )
         gpu_device->super.nb_data_faults += nb_elts;
-
-    /* update the data version in GPU immediately, and mark the data under transfer */
-    assert((gpu_elem->version != candidate->version) || (gpu_elem->data_transfer_status == PARSEC_DATA_STATUS_NOT_TRANSFER));
-    gpu_elem->version = candidate->version;
-    PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
-                         "GPU[%s]: GPU copy %p [ref_count %d] gets the same version %d as copy %p [ref_count %d] at %s:%d",
-                         gpu_device->super.name,
-                         gpu_elem, gpu_elem->super.super.obj_reference_count, gpu_elem->version, candidate, candidate->super.super.obj_reference_count,
-                         __FILE__, __LINE__);
 
     gpu_elem->data_transfer_status = PARSEC_DATA_STATUS_UNDER_TRANSFER;
     gpu_elem->push_task = gpu_task->ec;  /* only the task who does the transfer can modify the data status later. */
@@ -2399,6 +2400,13 @@ parsec_cuda_kernel_epilog( parsec_device_gpu_module_t *gpu_device,
 
         if( !(gpu_task->flow[i]->flow_flags & PARSEC_FLOW_ACCESS_WRITE) ) {
             /* Warning data_out for read only flows has been overwritten in pop */
+            /**
+             * The DSL might access / change things in data_out, and it expects the cpu copy
+             */
+            gpu_copy = this_task->data[i].data_out;
+            original = gpu_copy->original;
+            cpu_copy = original->device_copies[0];
+            this_task->data[i].data_out = cpu_copy;
             continue;
         }
 
@@ -2431,12 +2439,6 @@ parsec_cuda_kernel_epilog( parsec_device_gpu_module_t *gpu_device,
          *  The cpu_copy will be updated in the completion, and at that moment
          *  the two versions will be identical.
          */
-        cpu_copy->version = gpu_copy->version;
-        PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
-                             "GPU[%s]: CPU copy %p [ref_count %d] gets the same version %d as GPU copy %p [ref_count %d] at %s:%d",
-                             gpu_device->super.name,
-                             cpu_copy, cpu_copy->super.super.obj_reference_count, cpu_copy->version, gpu_copy, gpu_copy->super.super.obj_reference_count,
-                             __FILE__, __LINE__);
 
         /**
          * Let's lie to the engine by reporting that working version of this
