@@ -6671,9 +6671,15 @@ static void jdf_generate_code_hook_gpu(const jdf_t *jdf,
     coutput("#if defined(PARSEC_DEBUG_NOISIER)\n"
             "  {\n"
             "    char tmp[MAX_TASK_STRLEN];\n"
-            "    PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream, \"GPU[%%s]:\\tEnqueue on device %%s priority %%d\", gpu_device->super.name, \n"
+            "    char tmp2[1024] = {0,};\n"
+            "    parsec_data_copy_t *__dc = NULL;");
+    for( di = 0, fl = f->dataflow; fl != NULL; fl = fl->next, di++ ) {
+        coutput("    __dc = ((parsec_task_t*)this_task)->data[%d].data_out;\n", di);
+        coutput("    snprintf(tmp2+strlen(tmp2), 1024-strlen(tmp2), \"%%p d:%%d v:%%d \", __dc, __dc==NULL?-1:(int)(__dc->device_index), __dc==NULL?-1:(int)__dc->version );\n");
+    }
+    coutput("    PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream, \"GPU[%%s]:\\tEnqueue on device %%s priority %%d -- %%s\", gpu_device->super.name, \n"
             "           parsec_task_snprintf(tmp, MAX_TASK_STRLEN, (parsec_task_t *)this_task),\n"
-            "           this_task->priority );\n"
+            "           this_task->priority, tmp2 );\n"
             "  }\n"
             "#endif /* defined(PARSEC_DEBUG_NOISIER) */\n");
 
