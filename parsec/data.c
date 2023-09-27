@@ -194,6 +194,22 @@ int parsec_data_copy_detach(parsec_data_t* data,
     }
     data->device_copies[device] = copy->older;
 
+    if(device == data->owner_device) {
+        int mrc = -1;
+        int mrv = -1;
+        for(int i = 0; i < parsec_nb_devices; i++ ) {
+            if( NULL == data->device_copies[i] ) continue;
+            if( i == device ) continue;
+            if( data->device_copies[i]->version > mrv && 
+                (data->device_copies[i]->coherency_state == PARSEC_DATA_COHERENCY_EXCLUSIVE || 
+                 data->device_copies[i]->coherency_state == PARSEC_DATA_COHERENCY_SHARED) ) {
+                    mrc = i;
+                    mrv = data->device_copies[i]->version;
+                 }
+        }
+        data->owner_device = mrc;
+    }
+
     copy->original     = NULL;
     copy->older        = NULL;
     PARSEC_OBJ_RELEASE(data);
