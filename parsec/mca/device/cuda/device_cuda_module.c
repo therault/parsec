@@ -1822,6 +1822,9 @@ parsec_gpu_callback_complete_push(parsec_device_gpu_module_t   *gpu_device,
                     int rc;
                     /* Nobody is at the door to handle that event on the source of that data...
                      * we do the command directly */
+                    PARSEC_DEBUG_VERBOSE(20, parsec_gpu_output_stream,
+                                         "GPU[%s]:\tImpersonating device %s",
+                                         gpu_device->super.name, src_device->super.name);
                     parsec_atomic_lock( &source->original->lock );
                     source->readers--;
                     PARSEC_DEBUG_VERBOSE(20, parsec_gpu_output_stream,
@@ -1842,6 +1845,9 @@ parsec_gpu_callback_complete_push(parsec_device_gpu_module_t   *gpu_device,
                         src_device->data_avail_epoch++;
                     }
                     parsec_atomic_unlock( &source->original->lock );
+                    PARSEC_DEBUG_VERBOSE(20, parsec_gpu_output_stream,
+                                         "GPU[%s]:\tDone Impersonating device %s",
+                                         gpu_device->super.name, src_device->super.name);
                     /* Notify any waiting thread that we're done messing with that device structure */
                     rc = parsec_atomic_cas_int32(&src_device->mutex, -1, 0); (void)rc;
                     assert(rc);
@@ -1970,8 +1976,8 @@ progress_stream( parsec_device_gpu_module_t* gpu_device,
             if( PARSEC_HOOK_RETURN_AGAIN == task->last_status ) {
                 /* we can now reschedule the task on the same execution stream */
                 PARSEC_DEBUG_VERBOSE(2, parsec_gpu_output_stream,
-                                     "GPU[%s]: GPU task %p[%p] is ready to be rescheduled on the same CUDA device and same stream",
-                                     gpu_device->super.name, (void*)task, (void*)task->ec);
+                                     "GPU[%s]: GPU task %s[%p/%p] is ready to be rescheduled on the same CUDA device and same stream",
+                                     gpu_device->super.name, parsec_task_snprintf(task_str, MAX_TASK_STRLEN, task->ec), (void*)task, (void*)task->ec);
                 *out_task = NULL;
                 goto schedule_task;
             }
@@ -2015,9 +2021,9 @@ progress_stream( parsec_device_gpu_module_t* gpu_device,
          * execution stream pending list (to be executed again).
          */
         PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
-                             "GPU[%s]: GPU task %p has returned with ASYNC or AGAIN. Once the event "
+                             "GPU[%s]: GPU task %s (%p/%p) has returned with ASYNC or AGAIN. Once the event "
                              "trigger the task will be handled accordingly",
-                             gpu_device->super.name, (void*)task);
+                             gpu_device->super.name, parsec_task_snprintf(task_str, MAX_TASK_STRLEN, task->ec), (void*)task, (void*)task->ec);
     }
     task->last_status = rc;
     /**
@@ -2566,6 +2572,12 @@ parsec_cuda_kernel_scheduler( parsec_execution_stream_t *es,
 
     parsec_atomic_fetch_add_int64(&gpu_device->super.device_load, gpu_task->load);
 
+    PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
+                             "GPU[%s]:\t ES %d Scheduling task %s priority %d",
+                             gpu_device->super.name, es->core_id,
+                             parsec_gpu_describe_gpu_task(tmp, MAX_TASK_STRLEN, gpu_task),
+                             gpu_task->ec->priority );
+
 #if defined(PARSEC_PROF_TRACE)
     PARSEC_PROFILING_TRACE_FLAGS( es->es_profile,
                                   PARSEC_PROF_FUNC_KEY_END(gpu_task->ec->taskpool,
@@ -2598,12 +2610,12 @@ parsec_cuda_kernel_scheduler( parsec_execution_stream_t *es,
             nanosleep(&delay, NULL);
         }
     }
-    if( 0 < rc ) {
+    if( rc > 0 ) {
         parsec_fifo_push( &(gpu_device->pending), (parsec_list_item_t*)gpu_task );
         return PARSEC_HOOK_RETURN_ASYNC;
     }
-    PARSEC_DEBUG_VERBOSE(2, parsec_gpu_output_stream,"GPU[%s]: Entering GPU management at %s:%d",
-                         gpu_device->super.name, __FILE__, __LINE__);
+    PARSEC_DEBUG_VERBOSE(2, parsec_gpu_output_stream,"GPU[%s]: ES %d Entering GPU management at %s:%d",
+                         gpu_device->super.name, es->core_id, __FILE__, __LINE__);
 
 #if defined(PARSEC_PROF_TRACE)
     if( parsec_gpu_trackable_events & PARSEC_PROFILE_GPU_TRACK_OWN )
@@ -2767,8 +2779,8 @@ parsec_cuda_kernel_scheduler( parsec_execution_stream_t *es,
             PARSEC_PROFILING_TRACE( es->es_profile, parsec_gpu_own_GPU_key_end,
                                     (unsigned long)es, PROFILE_OBJECT_ID_NULL, NULL );
 #endif  /* defined(PARSEC_PROF_TRACE) */
-        PARSEC_DEBUG_VERBOSE(2, parsec_gpu_output_stream,"GPU[%s]: Leaving GPU management at %s:%d", 
-                             gpu_device->super.name, __FILE__, __LINE__);
+        PARSEC_DEBUG_VERBOSE(2, parsec_gpu_output_stream,"GPU[%s]: ES %d Leaving GPU management at %s:%d", 
+                             gpu_device->super.name, es->core_id, __FILE__, __LINE__);
 	/* inform the upper layer not to use the task argument, it has been long gone */
         return PARSEC_HOOK_RETURN_ASYNC;
     }
