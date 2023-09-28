@@ -1959,10 +1959,10 @@ progress_stream( parsec_device_gpu_module_t* gpu_device,
             /* Save the task for the next step */
             task = *out_task = stream->tasks[stream->end];
             PARSEC_DEBUG_VERBOSE(19, parsec_gpu_output_stream,
-                                 "GPU[%s]: Completed %s priority %d on stream %s{%p}",
+                                 "GPU[%s]: Completed %s priority %d on stream %s{%p} at position %d",
                                  gpu_device->super.name,
                                  parsec_task_snprintf(task_str, MAX_TASK_STRLEN, task->ec),
-                                 task->ec->priority, stream->name, (void*)stream);
+                                 task->ec->priority, stream->name, (void*)stream, stream->end);
             stream->tasks[stream->end]    = NULL;
             stream->end = (stream->end + 1) % stream->max_events;
 
@@ -1992,6 +1992,11 @@ progress_stream( parsec_device_gpu_module_t* gpu_device,
             PARSEC_CUDA_CHECK_ERROR( "(progress_stream) cudaEventQuery ", rc,
                                      {return PARSEC_HOOK_RETURN_AGAIN;} );
         }
+        PARSEC_DEBUG_VERBOSE(19, parsec_gpu_output_stream,
+                                 "GPU[%s]: Checked that %s priority %d is still running on stream %s{%p} (at position %d)",
+                                 gpu_device->super.name,
+                                 parsec_task_snprintf(task_str, MAX_TASK_STRLEN, stream->tasks[stream->end]->ec),
+                                 stream->tasks[stream->end]->ec->priority, stream->name, (void*)stream, stream->end);
     }
 
  grab_a_task:
@@ -2035,12 +2040,13 @@ progress_stream( parsec_device_gpu_module_t* gpu_device,
     rc = cudaEventRecord( cuda_stream->events[stream->start], cuda_stream->cuda_stream );
     assert(cudaSuccess == rc);
     stream->tasks[stream->start] = task;
-    stream->start = (stream->start + 1) % stream->max_events;
     PARSEC_DEBUG_VERBOSE(20, parsec_gpu_output_stream,
-                         "GPU[%s]: Submitted %s(task %p) priority %d on stream %s{%p}",
+                         "GPU[%s]: Submitted %s(task %p) priority %d on stream %s{%p} at start position %d. New start at %d, end position is at %d",
                          gpu_device->super.name,
-                         task->ec->task_class->name, (void*)task->ec, task->ec->priority,
-                         stream->name, (void*)stream);
+                         parsec_task_snprintf(task_str, MAX_TASK_STRLEN, task->ec), (void*)task->ec, task->ec->priority,
+                         stream->name, (void*)stream,
+                         stream->start, (stream->start + 1) % stream->max_events, stream->end);
+    stream->start = (stream->start + 1) % stream->max_events;
 
     task = NULL;
     goto grab_a_task;
