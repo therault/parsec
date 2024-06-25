@@ -9,6 +9,8 @@
 
 #include "parsec/parsec_config.h"
 
+BEGIN_C_DECLS
+
 /* Basic Key-Value Info interface */
 
 typedef struct dbp_file dbp_file_t;
@@ -86,5 +88,7 @@ int   dbp_event_info_len(const dbp_event_t *e, const dbp_file_t *dbp);
 
 // DEBUG
 void dbp_file_print(dbp_file_t * file);
+
+END_C_DECLS
 
 #endif /* _dbpreader_h_ */

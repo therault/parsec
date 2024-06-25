@@ -42,4 +42,4 @@ if(Graphviz_FOUND)
 endif(Graphviz_FOUND)
 
 Add_Subdirectory(python)
-
+Add_Subdirectory(perfetto)
