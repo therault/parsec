@@ -31,9 +31,9 @@ static void pins_thread_init_alperf(parsec_execution_stream_t * es);
 static void pins_thread_fini_alperf(parsec_execution_stream_t * es);
 
 /* PINS callbacks */
-static void alperf_exec_count_end(struct parsec_execution_stream_s *es,
-                                  struct parsec_task_s *task,
-                                  struct parsec_pins_next_callback_s * cb_taskpool);
+static void alperf_exec_count_end(struct parsec_pins_next_callback_s * cb_taskpool,
+                                  struct parsec_execution_stream_s *es,
+                                  struct parsec_task_s *task);
 
 const parsec_pins_module_t parsec_pins_alperf_module = {
     &parsec_pins_alperf_component,
@@ -86,9 +86,9 @@ extern parsec_profiling_dictionary_t *parsec_profiling_dictionary;
 /*
  PINS CALLBACKS
  */
-static void alperf_exec_count_end(struct parsec_execution_stream_s *es,
-                                  struct parsec_task_s *task,
-                                  struct parsec_pins_next_callback_s * cb_taskpool) {
+static void alperf_exec_count_end(struct parsec_pins_next_callback_s * cb_taskpool,
+                                  struct parsec_execution_stream_s *es,
+                                  struct parsec_task_s *task) {
     (void)cb_taskpool;
     (void)task;
     (void)es;

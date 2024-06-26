@@ -1910,7 +1910,7 @@ remote_dep_mpi_save_activate_cb(parsec_comm_engine_t *ce, parsec_ce_tag_t tag,
     (void) tag; (void) cb_data;
     parsec_execution_stream_t* es = &parsec_comm_es;
 
-    PARSEC_PINS(es, ACTIVATE_CB_BEGIN, NULL);
+    PARSEC_PINS(ACTIVATE_CB_BEGIN, es);
 #if defined(PARSEC_DEBUG_NOISIER)
     char tmp[MAX_TASK_STRLEN];
 #endif
@@ -1960,7 +1960,7 @@ remote_dep_mpi_save_activate_cb(parsec_comm_engine_t *ce, parsec_ce_tag_t tag,
         deps->eager_msg = NULL;  /* this buffer will now be reused, not safe to store here */
     }
     assert(position == length);
-    PARSEC_PINS(es, ACTIVATE_CB_END, NULL);
+    PARSEC_PINS(ACTIVATE_CB_END, es);
     return 1;
 }
 
@@ -2022,7 +2022,7 @@ static void
 remote_dep_mpi_release_delayed_deps(parsec_execution_stream_t* es,
                                     dep_cmd_item_t *item)
 {
-    PARSEC_PINS(es, ACTIVATE_CB_BEGIN, NULL);
+    PARSEC_PINS(ACTIVATE_CB_BEGIN, es);
     parsec_remote_deps_t *deps = item->cmd.release.deps;
     int rc, position = 0;
     char* buffer = (char*)deps->taskpool;  /* get back the buffer from the "temporary" storage */
@@ -2036,7 +2036,7 @@ remote_dep_mpi_release_delayed_deps(parsec_execution_stream_t* es,
     assert(deps != NULL);
     remote_dep_mpi_recv_activate(es, deps, buffer, deps->msg.length, &position);
     free(buffer);
-    PARSEC_PINS(es, ACTIVATE_CB_END, NULL);
+    PARSEC_PINS(ACTIVATE_CB_END, es);
 }
 
 static void remote_dep_mpi_get_start(parsec_execution_stream_t* es,

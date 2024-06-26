@@ -384,10 +384,10 @@ parsec_dtd_data_flush_all(parsec_taskpool_t *tp, parsec_data_collection_t *dc)
     parsec_hash_table_t *hash_table   = (parsec_hash_table_t *)dc->tile_h_table;
     parsec_execution_stream_t *es = parsec_my_execution_stream();
 
-    PARSEC_PINS(es, DATA_FLUSH_BEGIN, NULL);
+    PARSEC_PINS(DATA_FLUSH_BEGIN, es);
 
     parsec_hash_table_for_all( hash_table, (parsec_hash_elem_fct_t)parsec_internal_dtd_data_flush, tp);
 
-    PARSEC_PINS(es, DATA_FLUSH_END, NULL);
+    PARSEC_PINS(DATA_FLUSH_END, es);
     return PARSEC_SUCCESS; /* TODO: internal_dtd_data_flush should care for error codepaths */
 }

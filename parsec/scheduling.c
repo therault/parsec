@@ -148,14 +148,14 @@ int __parsec_execute( parsec_execution_stream_t* es,
 
     parsec_hook_t *hook = tc->incarnations[task->selected_chore].hook;
     assert( NULL != hook );
-    PARSEC_PINS(es, EXEC_BEGIN, task);
+    PARSEC_PINS(EXEC_BEGIN, es, task);
     rc = hook( es, task );
 #if defined(PARSEC_PROF_TRACE)
     task->prof_info.task_return_code = rc;
 #endif
     /* Record EXEC_END event to ensure the EXEC_BEGIN is completed
      * return code was stored in task_return_code */
-    PARSEC_PINS(es, EXEC_END, task);
+    PARSEC_PINS(EXEC_END, es, task);
 
     assert( PARSEC_HOOK_RETURN_NEXT != rc );
     if( PARSEC_HOOK_RETURN_ASYNC != rc ) {
@@ -263,7 +263,7 @@ __parsec_schedule(parsec_execution_stream_t* es,
      * are not thread-safe. Here we really want the profiling to be generated into the
      * local stream and not into the stream where we try to enqueue the task into (operation
      * which is thread safe)*/
-    PARSEC_PINS(local_es, SCHEDULE_BEGIN, tasks_ring);
+    PARSEC_PINS(SCHEDULE_BEGIN, local_es, tasks_ring);
 
 #if defined(PARSEC_DEBUG_PARANOID) || defined(PARSEC_DEBUG_NOISIER)
     {
@@ -304,7 +304,7 @@ __parsec_schedule(parsec_execution_stream_t* es,
 
     ret = parsec_current_scheduler->module.schedule(es, tasks_ring, distance);
 
-    PARSEC_PINS(local_es, SCHEDULE_END, tasks_ring);
+    PARSEC_PINS(SCHEDULE_END, local_es);
 
     return ret;
 }
@@ -426,7 +426,7 @@ int __parsec_complete_execution( parsec_execution_stream_t *es,
     /* complete execution PINS event includes the preparation of the
      * output and the and the call to complete_execution.
      */
-    PARSEC_PINS(es, COMPLETE_EXEC_BEGIN, task);
+    PARSEC_PINS(COMPLETE_EXEC_BEGIN, es, task);
 
     if( task->selected_device /* not set for startup tasks */
      && PARSEC_DEV_IS_GPU(task->selected_device->type) /* load not counted on CPU devices, see the task_load add comment */ ) {
@@ -451,7 +451,7 @@ int __parsec_complete_execution( parsec_execution_stream_t *es,
     /* Release the execution context */
     (void)task->task_class->release_task( es, task );
 
-    PARSEC_PINS(es, COMPLETE_EXEC_END, task);
+    PARSEC_PINS(COMPLETE_EXEC_END, es, task);
 
     return rc;
 }
@@ -463,9 +463,9 @@ int __parsec_task_progress( parsec_execution_stream_t* es,
     int rc = PARSEC_HOOK_RETURN_DONE;
 
     if(task->status <= PARSEC_TASK_STATUS_PREPARE_INPUT) {
-        PARSEC_PINS(es, PREPARE_INPUT_BEGIN, task);
+        PARSEC_PINS(PREPARE_INPUT_BEGIN, es, task);
         rc = task->task_class->prepare_input(es, task);
-        PARSEC_PINS(es, PREPARE_INPUT_END, task);
+        PARSEC_PINS(PREPARE_INPUT_END, es, task);
     }
     switch(rc) {
     case PARSEC_HOOK_RETURN_DONE: {
@@ -549,13 +549,13 @@ static int __parsec_taskpool_test( parsec_taskpool_t* tp, parsec_execution_strea
 
     assert(PARSEC_THREAD_IS_MASTER(es));
 
-    /* first select begin, right before the wait_for_the... goto label */
-    PARSEC_PINS(es, SELECT_BEGIN, NULL);
-
     if( NULL == parsec_current_scheduler ) {
         parsec_fatal("Main thread entered parsec_taskpool_test, while a scheduler is not selected yet!");
         return -1;
     }
+
+    /* first select begin, right before the wait_for_the... goto label */
+    PARSEC_PINS(SELECT_BEGIN, es);
 
     if( tp->tdm.module->taskpool_state(tp) != PARSEC_TERM_TP_TERMINATED ) {
 #if defined(DISTRIBUTED)
@@ -573,9 +573,10 @@ static int __parsec_taskpool_test( parsec_taskpool_t* tp, parsec_execution_strea
 
             nbiterations++;
         }
+        PARSEC_PINS(SELECT_END, es, task);
+    } else {
+        PARSEC_PINS(SELECT_END, es, task);
     }
-
-    PARSEC_PINS(es, SELECT_END, NULL);
 
     return nbiterations;
 }
@@ -592,13 +593,13 @@ static int __parsec_taskpool_wait( parsec_taskpool_t* tp, parsec_execution_strea
 
     assert(PARSEC_THREAD_IS_MASTER(es));
 
-    /* first select begin, right before the wait_for_the... goto label */
-    PARSEC_PINS(es, SELECT_BEGIN, NULL);
-
     if( NULL == parsec_current_scheduler ) {
         parsec_fatal("Main thread entered parsec_taskpool_wait, while a scheduler is not selected yet!");
         return -1;
     }
+
+    /* first select begin, right before the wait_for_the... goto label */
+    PARSEC_PINS(SELECT_BEGIN, es);
 
 #if defined(DISTRIBUTED)
     if( (1 == parsec_communication_engine_up) &&
@@ -634,8 +635,10 @@ static int __parsec_taskpool_wait( parsec_taskpool_t* tp, parsec_execution_strea
         if( NULL != task ) {
             misses_in_a_row = 0;  /* reset the misses counter */
 
+            PARSEC_PINS(SELECT_END, es, task);
             rc = __parsec_task_progress(es, task, distance);
             (void)rc;  /* for now ignore the return value */
+            PARSEC_PINS(SELECT_BEGIN, es);
 
             nbiterations++;
         }
@@ -643,7 +646,7 @@ static int __parsec_taskpool_wait( parsec_taskpool_t* tp, parsec_execution_strea
 
     if( NULL != tp->on_leave_wait ) tp->on_leave_wait(tp, tp->on_leave_wait_data);
 
-    PARSEC_PINS(es, SELECT_END, NULL);
+    PARSEC_PINS(SELECT_END, es, NULL);
 
     return nbiterations;
 }
@@ -718,7 +721,7 @@ int __parsec_context_wait( parsec_execution_stream_t* es )
     parsec_rusage_per_es(es, false);
 
     /* first select begin, right before the wait_for_the... goto label */
-    PARSEC_PINS(es, SELECT_BEGIN, NULL);
+    PARSEC_PINS(SELECT_BEGIN, es);
 
     /* The main loop where all the threads will spend their time */
   wait_for_the_next_round:
@@ -735,6 +738,7 @@ int __parsec_context_wait( parsec_execution_stream_t* es )
 
     if( NULL == parsec_current_scheduler ) {
         parsec_fatal("Main thread entered parsec_context_wait, while a scheduler is not selected yet!");
+        PARSEC_PINS(SELECT_END, es, NULL);
         return -1;
     }
   skip_first_barrier:
@@ -760,9 +764,9 @@ int __parsec_context_wait( parsec_execution_stream_t* es )
         if( NULL != task ) {
             misses_in_a_row = 0;  /* reset the misses counter */
 
-            PARSEC_PINS(es, SELECT_END, task);
+            PARSEC_PINS(SELECT_END, es, task);
             rc = __parsec_task_progress(es, task, distance);
-            PARSEC_PINS(es, SELECT_BEGIN, task);
+            PARSEC_PINS(SELECT_BEGIN, es);
             (void)rc;  /* for now ignore the return value */
 
             nbiterations++;
@@ -801,7 +805,7 @@ int __parsec_context_wait( parsec_execution_stream_t* es )
     // final select end - can we mark this as special somehow?
     // actually, it will already be obviously special, since it will be the only select
     // that has no context
-    PARSEC_PINS(es, SELECT_END, NULL);
+    PARSEC_PINS(SELECT_END, es, NULL);
 
     if( parsec_context->__parsec_internal_finalization_in_progress ) {
         PARSEC_PINS_THREAD_FINI(es);
