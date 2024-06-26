@@ -14,9 +14,20 @@
 #define PARSEC_PINS_SEPARATOR ";"
 
 struct parsec_pins_next_callback_s;
-typedef void (*parsec_pins_callback)(struct parsec_execution_stream_s*   es,
-                                     struct parsec_task_s*               task,
-                                     struct parsec_pins_next_callback_s* cb_data);
+typedef void (*parsec_pins_empty_callback_t)(struct parsec_pins_next_callback_s* cb_data,
+                                             struct parsec_execution_stream_s*   es);
+typedef void (*parsec_pins_task_callback_t)(struct parsec_pins_next_callback_s* cb_data,
+                                            struct parsec_execution_stream_s*   es,
+                                            struct parsec_task_s*               task);
+typedef void (*parsec_pins_two_task_callback_t)(struct parsec_pins_next_callback_s* cb_data,
+                                                struct parsec_execution_stream_s*   es,
+                                                struct parsec_task_s*               task1,
+                                                struct parsec_task_s*               task2);
+typedef union {
+    parsec_pins_empty_callback_t    parsec_pins_empty_callback;
+    parsec_pins_task_callback_t     parsec_pins_task_callback;
+    parsec_pins_two_task_callback_t parsec_pins_two_task_callback;
+} parsec_pins_callback;
 
 typedef struct parsec_pins_next_callback_s {
     parsec_pins_callback                cb_func;
@@ -24,32 +35,42 @@ typedef struct parsec_pins_next_callback_s {
 } parsec_pins_next_callback_t;
 
 typedef enum PARSEC_PINS_FLAG {
-    SELECT_BEGIN = 0,    // called before scheduler begins looking for an available task
-    SELECT_END,          // called after scheduler has finished looking for an available task
-    PREPARE_INPUT_BEGIN,
-    PREPARE_INPUT_END,
-    RELEASE_DEPS_BEGIN,
-    RELEASE_DEPS_END,
-    ACTIVATE_CB_BEGIN,
-    ACTIVATE_CB_END,
-    DATA_FLUSH_BEGIN,
-    DATA_FLUSH_END,
-    EXEC_BEGIN,          // called before thread executes a task
-    EXEC_END,            // called after thread executes a task
-    COMPLETE_EXEC_BEGIN, // called before scheduler adds a newly-enabled task
-    COMPLETE_EXEC_END,   // called after scheduler adds a newly-enabled task
-    SCHEDULE_BEGIN,      // called before scheduling a ring of tasks
-    SCHEDULE_END,        // called after scheduling a ring of tasks
-    /* what follows are Special Events. They do not necessarily
-     * obey the 'exec unit, exec context' contract.
-     */
-    THREAD_INIT,         // Provided as an option for modules to run work during thread init without using the MCA module registration system.
-    THREAD_FINI,         // Similar to above, for thread finalization.
-    /* inactive but tentatively planned (no current call in PaRSEC runtime)
-     PARSEC_SCHEDULED,
-     PARSEC_PROLOGUE,
-     PARSEC_RELEASE,
-     */
+        SELECT_BEGIN = 0,    // called before scheduler begins looking for an available task
+#define SELECT_BEGIN_PINS_FCT_TYPE parsec_pins_empty_callback
+        SELECT_END,          // called after scheduler has finished looking for an available task. Parameter: the selected task (or NULL if none found)
+#define SELECT_END_PINS_FCT_TYPE parsec_pins_task_callback
+        PREPARE_INPUT_BEGIN, // called before the data_lookup() step. Parameter: the task for which data_lookup() is called
+#define PREPARE_INPUT_BEGIN_PINS_FCT_TYPE parsec_pins_task_callback
+        PREPARE_INPUT_END,   // called after the data_lookup() step. Parameter: the task for which data_lookup() was called
+#define PREPARE_INPUT_END_PINS_FCT_TYPE parsec_pins_task_callback
+        RELEASE_DEPS_BEGIN,  // called before the release_deps() step. Parameter: the task for which release_deps() is called
+#define RELEASE_DEPS_BEGIN_PINS_FCT_TYPE parsec_pins_task_callback
+        RELEASE_DEPS_END,    // called after the release_deps() step. Parameter: the task for which release_deps() was called
+#define RELEASE_DEPS_END_PINS_FCT_TYPE parsec_pins_task_callback
+        ACTIVATE_CB_BEGIN,   // called before handling an active message that sends task activation orders
+#define ACTIVATE_CB_BEGIN_PINS_FCT_TYPE parsec_pins_empty_callback
+        ACTIVATE_CB_END,     // called after handling an active message that sends task activation orders
+#define ACTIVATE_CB_END_PINS_FCT_TYPE parsec_pins_empty_callback
+        DATA_FLUSH_BEGIN,    // called before flushing data tracking in the DTD DSL (all currently tracked data)
+#define DATA_FLUSH_BEGIN_PINS_FCT_TYPE parsec_pins_empty_callback
+        DATA_FLUSH_END,      // called after flushing data tracking in the DTD DSL (all currently tracked data)
+#define DATA_FLUSH_END_PINS_FCT_TYPE parsec_pins_empty_callback
+        EXEC_BEGIN,          // called before thread executes a task. Parameter: the task that starts executing
+#define EXEC_BEGIN_PINS_FCT_TYPE parsec_pins_task_callback
+        EXEC_END,            // called after thread executes a task. Parameter: the task that is done executing
+#define EXEC_END_PINS_FCT_TYPE parsec_pins_task_callback
+        COMPLETE_EXEC_BEGIN, // called at the beginning of the task execution completion (will discover new tasks). Parameter: the task that completes
+#define COMPLETE_EXEC_BEGIN_PINS_FCT_TYPE parsec_pins_task_callback
+        COMPLETE_EXEC_END,   // called after the task execution completion (all new tasks have been discovered). Parameter: the task that completed
+#define COMPLETE_EXEC_END_PINS_FCT_TYPE parsec_pins_task_callback
+        SCHEDULE_BEGIN,      // called before scheduling a ring of tasks. Parameter: the ring of tasks to schedule
+#define SCHEDULE_BEGIN_PINS_FCT_TYPE parsec_pins_task_callback
+        SCHEDULE_END,        // called after scheduling a ring of tasks.
+#define SCHEDULE_END_PINS_FCT_TYPE parsec_pins_empty_callback
+        THREAD_INIT,         // Provided as an option for modules to run work during thread init without using the MCA module registration system.
+#define THREAD_INIT_PINS_FCT_TYPE parsec_pins_empty_callback
+        THREAD_FINI,         // Similar to above, for thread finalization.
+#define THREAD_FINI_PINS_FCT_TYPE parsec_pins_empty_callback
     /* PARSEC_PINS_FLAG_COUNT is not an event at all */
     PARSEC_PINS_FLAG_COUNT
 } PARSEC_PINS_FLAG;
@@ -137,9 +158,6 @@ void parsec_pins_thread_fini(struct parsec_execution_stream_s * es);
 /*
  the following functions are intended for public use wherever they are necessary
  */
-void parsec_pins_instrument(struct parsec_execution_stream_s* es,
-                            PARSEC_PINS_FLAG method_flag,
-                            struct parsec_task_s* task);
 
 void parsec_pins_disable_registration(int disable);
 
@@ -162,18 +180,48 @@ PARSEC_PINS_FLAG parsec_pins_name_to_begin_flag(const char *name);
 
 #ifdef PARSEC_PROF_PINS
 
-#define PARSEC_PINS(unit, method_flag, task)                 \
-    do {                                                     \
-        if (PARSEC_PINS_FLAG_ENABLED(method_flag)) {         \
-            parsec_pins_instrument(unit, method_flag, task); \
-        }                                                    \
+/* These are just macro helpers to make the preprocessor do what we want */
+#define PARSEC_PINS_FIRST_ARG_(N, ...) N
+#define PARSEC_PINS_FIRST_ARG(args) PARSEC_PINS_FIRST_ARG_ args
+#define PARSEC_PINS_FCT_TYPE(method_flag) method_flag ## _PINS_FCT_TYPE
+#define PARSEC_PINS_FCT_TYPE_TO_CALLBACK_(src_type) parsec_pins_make_callback_ ## src_type
+#define PARSEC_PINS_FCT_TYPE_TO_CALLBACK(src_type) PARSEC_PINS_FCT_TYPE_TO_CALLBACK_(src_type)
+#define PARSEC_PINS_MAKE_FCT_TO_CALLBACK(src_type) \
+  static inline parsec_pins_callback PARSEC_PINS_FCT_TYPE_TO_CALLBACK(src_type)(src_type ## _t cb) { \
+    parsec_pins_callback ret; \
+    ret.src_type = cb; \
+    return ret; \
+  }
+/* We need one such converter per type used, to allow for type-checking */
+PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_empty_callback);
+PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_task_callback);
+PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_two_task_callback);
+/* If you do not want to use the enum name but the enum value you need to
+ * use this explicit macro and pass the name of the field that describes the
+ * type of function expected in the PARSEC_PINS call */
+#define PARSEC_PINS_EXPLICIT(_method_flag, _pname, _args...)                             \
+    do {                                                                                 \
+        if (PARSEC_PINS_FLAG_ENABLED(_method_flag)) {                                    \
+            assert( _method_flag < PARSEC_PINS_FLAG_COUNT );                             \
+            parsec_execution_stream_t *_es;                                              \
+            _es = PARSEC_PINS_FIRST_ARG((_args));                                        \
+            parsec_pins_next_callback_t* cb_event = &_es->pins_events_cb[_method_flag];  \
+            while( NULL != cb_event->cb_func._pname ) {                                  \
+                cb_event->cb_func._pname(cb_event->cb_data, _args);                      \
+                cb_event = cb_event->cb_data;                                            \
+            }                                                                            \
+        }                                                                                \
     } while (0)
+/* If you use the enum name to denote a PINS event, you can use this macro directly */
+#define PARSEC_PINS(method_flag, args...)              \
+    PARSEC_PINS_EXPLICIT(method_flag, PARSEC_PINS_FCT_TYPE(method_flag), args)
 #define PARSEC_PINS_DISABLE_REGISTRATION(boolean)      \
     parsec_pins_disable_registration(boolean)
+/* Use the enum name when calling PARSEC_PINS_[UN]REGISTER, or create your union to call parsec_pins_[un]register */
 #define PARSEC_PINS_REGISTER(unit, method_flag, cb, data)       \
-    parsec_pins_register_callback(unit, method_flag, cb, data)
-#define PARSEC_PINS_UNREGISTER(unit, method_flag, cb, pdata)     \
-    parsec_pins_unregister_callback(unit, method_flag, cb, pdata)
+    parsec_pins_register_callback(unit, method_flag, PARSEC_PINS_FCT_TYPE_TO_CALLBACK(PARSEC_PINS_FCT_TYPE(method_flag))( cb ), data)
+#define PARSEC_PINS_UNREGISTER(unit, method_flag, cb, data)       \
+    parsec_pins_unregister_callback(unit, method_flag, PARSEC_PINS_FCT_TYPE_TO_CALLBACK(PARSEC_PINS_FCT_TYPE(method_flag))( cb ), data)
 #define PARSEC_PINS_INIT(master_context)               \
     parsec_pins_init(master_context)
 #define PARSEC_PINS_FINI(master_context)               \
@@ -188,8 +236,9 @@ PARSEC_PINS_FLAG parsec_pins_name_to_begin_flag(const char *name);
     parsec_pins_taskpool_fini(parsec_tp)
 
 #else // NOT PARSEC_PROF_PINS
-
-#define PARSEC_PINS(method_flag, exec_unit, task)      \
+#define PARSEC_PINS_EXPLICIT(_method_flag, _pname, _args...)   \
+    do {} while (0)
+#define PARSEC_PINS(method_flag, args...)              \
     do {} while (0)
 #define PARSEC_PINS_DISABLE_REGISTRATION(boolean)      \
     do {} while(0)

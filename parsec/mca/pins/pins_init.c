@@ -147,7 +147,7 @@ void parsec_pins_thread_init(parsec_execution_stream_t* es)
     int i;
 
     for( i = 0; i < PARSEC_PINS_FLAG_COUNT; i++ ) {
-        es->pins_events_cb[i].cb_func = NULL;
+        es->pins_events_cb[i].cb_func.parsec_pins_empty_callback = NULL;
         es->pins_events_cb[i].cb_data = NULL;
     }
     if (NULL != modules_activated) {
@@ -157,7 +157,7 @@ void parsec_pins_thread_init(parsec_execution_stream_t* es)
         }
     }
 
-    PARSEC_PINS(es, THREAD_INIT, NULL);
+    PARSEC_PINS(THREAD_INIT, es);
 }
 
 /**
@@ -167,7 +167,7 @@ void parsec_pins_thread_fini(parsec_execution_stream_t* es)
 {
     int i = 0;
 
-    PARSEC_PINS(es, THREAD_FINI, NULL);
+    PARSEC_PINS(THREAD_FINI, es);
 
     if (NULL != modules_activated) {
         for(i = 0; i < num_modules_activated; i++) {
@@ -177,7 +177,7 @@ void parsec_pins_thread_fini(parsec_execution_stream_t* es)
     }
 
     for( i = 0; i < PARSEC_PINS_FLAG_COUNT; i++ ) {
-        assert(NULL == es->pins_events_cb[i].cb_func);
+        assert(NULL == es->pins_events_cb[i].cb_func.parsec_pins_empty_callback);
         assert(NULL == es->pins_events_cb[i].cb_data);
     }
 }

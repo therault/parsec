@@ -1700,7 +1700,7 @@ parsec_dtd_release_deps(parsec_execution_stream_t *es,
 
     assert(NULL != es);
 
-    PARSEC_PINS(es, RELEASE_DEPS_BEGIN, this_task);
+    PARSEC_PINS(RELEASE_DEPS_BEGIN, es, this_task);
 #if defined(DISTRIBUTED)
     arg.remote_deps = deps;
 #endif /* defined(DISTRIBUTED) */
@@ -1777,7 +1777,7 @@ parsec_dtd_release_deps(parsec_execution_stream_t *es,
         __parsec_schedule_vp(es, arg.ready_lists, 0);
     }
 
-    PARSEC_PINS(es, RELEASE_DEPS_END, this_task);
+    PARSEC_PINS(RELEASE_DEPS_END, es, this_task);
     return 0;
 }
 

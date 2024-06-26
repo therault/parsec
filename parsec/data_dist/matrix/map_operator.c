@@ -252,7 +252,7 @@ static int release_deps(parsec_execution_stream_t *es,
     parsec_task_t** ready_list;
     int i;
 
-    PARSEC_PINS(es, RELEASE_DEPS_BEGIN, (parsec_task_t *) this_task);
+    PARSEC_PINS(RELEASE_DEPS_BEGIN, es, (parsec_task_t *) this_task);
 
     ready_list = alloca(sizeof(parsec_task_t *) * es->virtual_process->parsec_context->nb_vp);
     for(i = 0; i < es->virtual_process->parsec_context->nb_vp; ready_list[i++] = NULL);
@@ -279,7 +279,7 @@ static int release_deps(parsec_execution_stream_t *es,
             PARSEC_DATA_COPY_RELEASE(this_task->data[1].data_in);
         }
     }
-    PARSEC_PINS(es, RELEASE_DEPS_END, (parsec_task_t *) this_task);
+    PARSEC_PINS(RELEASE_DEPS_END, es, (parsec_task_t *) this_task);
     (void)deps;
     return PARSEC_HOOK_RETURN_DONE;
 }

@@ -21,9 +21,9 @@ static void pins_thread_fini_iterators_checker(struct parsec_execution_stream_s*
 
 /* PINS callbacks */
 static void
-iterators_checker_exec_count_begin(parsec_execution_stream_t* es,
-                                   parsec_task_t* task,
-                                   struct parsec_pins_next_callback_s* data);
+iterators_checker_exec_count_begin(struct parsec_pins_next_callback_s* _data,
+                                   parsec_execution_stream_t* es,
+                                   parsec_task_t* task);
 
 const parsec_pins_module_t parsec_pins_iterators_checker_module = {
     &parsec_pins_iterators_checker_component,
@@ -83,9 +83,9 @@ static parsec_ontask_iterate_t print_link(parsec_execution_stream_t *es,
 }
 
 static void
-iterators_checker_exec_count_begin(parsec_execution_stream_t* es,
-                                   parsec_task_t* task,
-                                   struct parsec_pins_next_callback_s* _data)
+iterators_checker_exec_count_begin(struct parsec_pins_next_callback_s* _data,
+                                   parsec_execution_stream_t* es,
+                                   parsec_task_t* task)
 {
     char  str[TASK_STR_LEN];
     const parsec_dep_t *final_deps[MAX_PARAM_COUNT];

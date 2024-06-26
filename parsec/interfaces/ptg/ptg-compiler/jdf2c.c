@@ -7195,7 +7195,7 @@ static void jdf_generate_code_release_deps(const jdf_t *jdf, const jdf_function_
 {
     coutput("static int %s(parsec_execution_stream_t *es, %s *this_task, uint32_t action_mask, parsec_remote_deps_t *deps)\n"
             "{\n"
-            "  PARSEC_PINS(es, RELEASE_DEPS_BEGIN, (parsec_task_t *)this_task);"
+            "  PARSEC_PINS(RELEASE_DEPS_BEGIN, es, (parsec_task_t *)this_task);"
             "  const __parsec_%s_internal_taskpool_t *__parsec_tp = (const __parsec_%s_internal_taskpool_t *)this_task->taskpool;\n"
             "  parsec_release_dep_fct_arg_t arg;\n"
             "  int __vp_id;\n"
@@ -7295,7 +7295,7 @@ static void jdf_generate_code_release_deps(const jdf_t *jdf, const jdf_function_
     jdf_generate_code_free_hash_table_entry(jdf, f, 0/*consume_repo*/, 1/*release_inputs*/);
 
     coutput(
-        "  PARSEC_PINS(es, RELEASE_DEPS_END, (parsec_task_t *)this_task);"
+        "  PARSEC_PINS(RELEASE_DEPS_END, es, (parsec_task_t *)this_task);"
         "  return 0;\n"
         "}\n"
         "\n");
