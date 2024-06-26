@@ -67,9 +67,9 @@ pins_papi_read_and_trace(parsec_execution_stream_t* es,
  * whether or not a PAPI_read is required for any of the frequency groups in the event_cb's events list,
  * and if so calls pins_papi_read_and_trace to read them and put the information in the profiling data.
  */
-static void pins_papi_trace(parsec_execution_stream_t* es,
-                           parsec_task_t* task,
-                           parsec_pins_next_callback_t* cb_data)
+static void pins_papi_trace(parsec_pins_next_callback_t* cb_data,
+                            parsec_execution_stream_t* es,
+                            parsec_task_t* task)
 {
     parsec_pins_papi_callback_t* event_cb = (parsec_pins_papi_callback_t*)cb_data;
     parsec_time_t current_time = take_time();

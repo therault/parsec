@@ -27,19 +27,6 @@ const char *parsec_pins_enable_default_names = "release_deps,exec_begin";
 
 static int registration_disabled;
 
-void parsec_pins_instrument(struct parsec_execution_stream_s* es,
-                            PARSEC_PINS_FLAG method_flag,
-                            parsec_task_t* task)
-{
-    assert( method_flag < PARSEC_PINS_FLAG_COUNT );
-
-    parsec_pins_next_callback_t* cb_event = &es->pins_events_cb[method_flag];
-    while( NULL != cb_event->cb_func ) {
-        cb_event->cb_func(es, task, cb_event->cb_data);
-        cb_event = cb_event->cb_data;
-    }
-}
-
 /* convenience method provided 'just in case' */
 void parsec_pins_disable_registration(int disable)
 {
@@ -97,14 +84,14 @@ int parsec_pins_unregister_callback(struct parsec_execution_stream_s* es,
     }
 
     parsec_pins_next_callback_t* cb_event = &es->pins_events_cb[method_flag];
-    while( (NULL != cb_event->cb_data) && (cb != cb_event->cb_func) ) {
+    while( (NULL != cb_event->cb_data) && ( cb.parsec_pins_empty_callback != cb_event->cb_func.parsec_pins_empty_callback) ) {
         cb_event = cb_event->cb_data;
     }
     if( NULL == cb_event->cb_data ) {
         /* No matching event could be found in the list */
         return PARSEC_ERR_NOT_FOUND;
     }
-    assert(cb_event->cb_func == cb);
+    assert(cb_event->cb_func.parsec_pins_empty_callback == cb.parsec_pins_empty_callback);
     *cb_data = cb_event->cb_data;
     *cb_event = **cb_data;
     return PARSEC_SUCCESS;
