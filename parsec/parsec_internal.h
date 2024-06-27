@@ -27,9 +27,6 @@
 #include "parsec/class/info.h"
 #include "parsec/mca/pins/pins.h"
 
-#if defined(PARSEC_PROF_GRAPHER)
-#include "parsec/parsec_prof_grapher.h"
-#endif  /* defined(PARSEC_PROF_GRAPHER) */
 #include "parsec/mca/device/device.h"
 
 #include <string.h>

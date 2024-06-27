@@ -2238,6 +2238,7 @@ int remote_dep_ce_reconfigure(parsec_context_t* context)
         /* if nb_nodes==1, the parsec comm engine does not run with its own thread, so don't change the thread
          * execution stream to parsec_comm_es. */
         parsec_set_my_execution_stream(&parsec_comm_es);
+        parsec_pins_thread_init(&parsec_comm_es);
     }
     return PARSEC_SUCCESS;
 }

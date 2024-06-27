@@ -35,7 +35,6 @@
 #include "parsec/remote_dep.h"
 #include "parsec/datarepo.h"
 #include "parsec/bindthread.h"
-#include "parsec/parsec_prof_grapher.h"
 #include "parsec/vpmap.h"
 #include "parsec/class/info.h"
 #include "parsec/utils/mca_param.h"
@@ -145,7 +144,6 @@ static void parsec_rusage(bool print)
 #define parsec_rusage(b) do {} while(0)
 #endif /* defined(PARSEC_HAVE_GETRUSAGE) */
 
-static char *parsec_dot_file = NULL;
 static char *parsec_app_name = NULL;
 
 static int parsec_runtime_max_number_of_cores = -1;
@@ -586,15 +584,6 @@ parsec_context_t* parsec_init( int nb_cores, int* pargc, char** pargv[] )
 
     parsec_hash_tables_init();
 
-#if defined(PARSEC_PROF_GRAPHER)
-    char *dot_param = NULL;
-    parsec_mca_param_reg_string_name("profile", "dot", "Prefix for the DOT file name containing the DAGs executed by parsec (one file per rank)",
-                                     false, false, dot_param, &dot_param);
-    if( NULL != dot_param ) {
-        asprintf(&parsec_dot_file, "%s-%d.dot", dot_param, parsec_debug_rank);
-    }
-#endif
-
     /* the extra allocation will pertain to the virtual_processes array */
     context = (parsec_context_t*)malloc(sizeof(parsec_context_t) + (nb_vp-1) * sizeof(parsec_vp_t*));
 
@@ -771,10 +760,11 @@ parsec_context_t* parsec_init( int nb_cores, int* pargc, char** pargv[] )
     parsec_parse_comm_binding_parameter(comm_binding_parameter, context);
     parsec_parse_binding_parameter(binding_parameter, context, startup);
 
+    PARSEC_PINS_INIT(context);
+
     /* Introduce communication engine */
     (void)parsec_remote_dep_init(context);
 
-    PARSEC_PINS_INIT(context);
     if(profiling_enabled && (0 == parsec_pins_nb_modules_enabled())) {
         if(parsec_debug_rank == 0)
             parsec_warning("*** PaRSEC Profiling warning: creating profile file as requested,\n"
@@ -782,13 +772,6 @@ parsec_context_t* parsec_init( int nb_cores, int* pargc, char** pargv[] )
                            "*** Activate the MCA PINS Module task_profiler to get the previous behavior\n"
                            "***   ( --mca mca_pins task_profiler )\n");
     }
-
-#if defined(PARSEC_PROF_GRAPHER)
-    if(parsec_dot_file) {
-        parsec_prof_grapher_init(context, parsec_dot_file);
-        slow_option_used = 1;
-    }
-#endif  /* defined(PARSEC_PROF_GRAPHER) */
 
 #if defined(PARSEC_DEBUG_NOISIER) || defined(PARSEC_DEBUG_PARANOID)
     slow_option_used = 1;
@@ -976,9 +959,6 @@ int parsec_version_ex( size_t len, char* version_string) {
 #endif
 #if defined(PARSEC_PROF_DRY_DEP)
         "+drydep"
-#endif
-#if defined(PARSEC_PROF_GRAPHER)
-        "+grapher"
 #endif
 #if defined(PARSEC_SIM)
         "+sim"
@@ -1248,13 +1228,6 @@ int parsec_fini( parsec_context_t** pcontext )
         context->virtual_processes[p] = NULL;
     }
 
-    if(parsec_dot_file) {
-#if defined(PARSEC_PROF_GRAPHER)
-        parsec_prof_grapher_fini();
-#endif  /* defined(PARSEC_PROF_GRAPHER) */
-        free(parsec_dot_file);
-        parsec_dot_file = NULL;
-    }
     /* Destroy all resources allocated for the barrier */
     parsec_barrier_destroy( &(context->barrier) );
 
@@ -1654,8 +1627,6 @@ parsec_update_deps_with_mask(parsec_taskpool_t *tp,
  * necessarily required for the startup process, but it leaves traces such that
  * all executed tasks will show consistently (no difference between the startup
  * tasks and later tasks).
- * Since data -> task grapher logging is detected during dependency resolving,
- * and startup tasks don't have an input dependency, we also resolve this here.
  */
 void parsec_dependencies_mark_task_as_startup(parsec_task_t* PARSEC_RESTRICT task,
                                               parsec_execution_stream_t *es)
@@ -1701,9 +1672,7 @@ parsec_release_local_OUT_dependencies(parsec_execution_stream_t* es,
 
     completed = tc->update_deps(origin->taskpool, task, deps, origin, origin_flow, dest_flow);
 
-#if defined(PARSEC_PROF_GRAPHER)
-    parsec_prof_grapher_dep(origin, task, completed, origin_flow, dest_flow);
-#endif  /* defined(PARSEC_PROF_GRAPHER) */
+    PARSEC_PINS(TASK_DEPENDENCY, es, origin, task, completed, origin_flow, dest_flow);
 
     if( completed ) {
 

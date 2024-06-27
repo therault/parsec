@@ -16,12 +16,8 @@
 
 /**
  * Mask for PINS events that are enabled by default.
- * Note that we only use BEGIN events here,
- * END events map to the same mask element.
- * We do not enable BEGIN and END events separately.
  */
-uint64_t parsec_pins_enable_mask = PARSEC_PINS_FLAG_MASK(RELEASE_DEPS_BEGIN)
-                                 | PARSEC_PINS_FLAG_MASK(EXEC_BEGIN);
+uint64_t parsec_pins_enable_mask = ~(uint64_t)0;
 
 const char *parsec_pins_enable_default_names = "release_deps,exec_begin";
 

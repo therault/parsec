@@ -135,11 +135,6 @@ else( NOT MPI_C_FOUND )
 endif( NOT MPI_C_FOUND )
 list(APPEND SOURCES parsec_hwloc.c)
 
-if( PARSEC_PROF_GRAPHER )
-  list(APPEND SOURCES
-      parsec_prof_grapher.c)
-endif( PARSEC_PROF_GRAPHER )
-
 #
 # Setup targets
 #
@@ -337,11 +332,6 @@ install(FILES
         ${CMAKE_CURRENT_SOURCE_DIR}/parsec_internal.h
         ${CMAKE_CURRENT_SOURCE_DIR}/vpmap.h
         DESTINATION ${PARSEC_INSTALL_INCLUDEDIR}/parsec)
-if(PARSEC_PROF_GRAPHER)
-  install(FILES
-          ${CMAKE_CURRENT_SOURCE_DIR}/parsec_prof_grapher.h
-          DESTINATION ${PARSEC_INSTALL_INCLUDEDIR}/parsec )
-endif(PARSEC_PROF_GRAPHER)
 # Install header files for jdf generated code
 if( PARSEC_WITH_DEVEL_HEADERS )
   install(FILES

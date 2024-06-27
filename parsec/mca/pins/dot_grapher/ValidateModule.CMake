@@ -1,0 +1,8 @@
+if (PARSEC_PROF_PINS)
+  set(MCA_${COMPONENT}_${MODULE} ON)
+  file(GLOB MCA_${COMPONENT}_${MODULE}_SOURCES ${MCA_BASE_DIR}/${COMPONENT}/${MODULE}/[^\\.]*.c)
+  set(MCA_${COMPONENT}_${MODULE}_CONSTRUCTOR "${COMPONENT}_${MODULE}_static_component")
+else (PARSEC_PROF_PINS)
+  message(STATUS "Module ${MODULE} not enabled: PINS disabled.")
+  set(MCA_${COMPONENT}_${MODULE} OFF)
+endif (PARSEC_PROF_PINS)

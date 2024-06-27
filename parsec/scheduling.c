@@ -559,7 +559,7 @@ __parsec_get_next_task( parsec_execution_stream_t *es,
 static int __parsec_taskpool_test( parsec_taskpool_t* tp, parsec_execution_stream_t *es )
 {
     parsec_context_t* parsec_context = es->virtual_process->parsec_context;
-    parsec_task_t* task;
+    parsec_task_t* task = NULL;
     int nbiterations = 0, distance, rc;
 
     assert(PARSEC_THREAD_IS_MASTER(es));

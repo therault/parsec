@@ -10,7 +10,6 @@
 #include "parsec/utils/debug.h"
 #include "parsec/remote_dep.h"
 #include "parsec/data_dist/matrix/matrix.h"
-#include "parsec/parsec_prof_grapher.h"
 #include "parsec/parsec_binary_profile.h"
 #include "parsec/scheduling.h"
 #include "parsec/datarepo.h"
@@ -339,10 +338,6 @@ static int complete_hook(parsec_execution_stream_t *es,
     int k = this_task->locals[0].value;
     int n = this_task->locals[1].value;
     (void)k; (void)n; (void)__tp;
-
-#if defined(PARSEC_PROF_GRAPHER)
-    parsec_prof_grapher_task(this_task, es->th_id, es->virtual_process->vp_id, k+n);
-#endif  /* defined(PARSEC_PROF_GRAPHER) */
 
     release_deps(es, this_task,
                  (PARSEC_ACTION_RELEASE_REMOTE_DEPS |
