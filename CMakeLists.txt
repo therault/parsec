@@ -250,6 +250,8 @@ option(PARSEC_PROF_DRY_BODY
   "Disable calls to the actual bodies; no computation is performed" OFF)
 option(PARSEC_PROF_DRY_DEP
   "Disable calls to the actual data transport; remote dependencies are notified, but no data movement takes place" OFF)
+option(PARSEC_PROF_TASKSTUBS
+  "Enable the TaskStubs extension (also requires PINS)" OFF)
 option(PARSEC_PROFILING_USE_MMAP
   "Use MMAP to create the profile files" ON)
 mark_as_advanced(PARSEC_PROFILING_USE_MMAP)
@@ -298,6 +300,17 @@ else( PARSEC_PROF_TRACE )
   unset(PARSEC_PAPI_SDE)
   unset(PARSEC_PAPI_SDE CACHE)
 endif( PARSEC_PROF_TRACE )
+
+if( PARSEC_PROF_TASKSTUBS )
+  include(FetchContent)
+  FetchContent_Declare(
+        taskstubs
+        QUIET
+        GIT_REPOSITORY      https://github.com/therault/taskStubs.git
+        GIT_TAG             e76ed0ec8a0fce7629cc0dcc141425b13dce5d7a
+  )
+  FetchContent_MakeAvailable(taskstubs)
+endif( PARSEC_PROF_TASKSTUBS )
 
 # Check for compiler tools
 find_package(BISON 3)

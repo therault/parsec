@@ -29,6 +29,10 @@
 
 #include "parsec/mca/device/device.h"
 
+#if defined(PARSEC_PROF_TASKSTUBS)
+#include "tasktimer.h"
+#endif /* defined(PARSEC_PROF_TASKSTUBS) */
+
 #include <string.h>
 
 BEGIN_C_DECLS
@@ -527,6 +531,9 @@ PARSEC_DECLSPEC extern int parsec_runtime_keep_highest_priority_task;
 
 struct parsec_minimal_execution_context_s {
     PARSEC_MINIMAL_EXECUTION_CONTEXT
+#if defined(PARSEC_PROF_TASKSTUBS)
+    tasktimer_timer_t taskstub_timer;
+#endif /* defined(PARSEC_PROF_TASKSTUBS) */
 #if defined(PARSEC_PROF_TRACE)
     parsec_task_prof_info_t         prof_info;
 #endif /* defined(PARSEC_PROF_TRACE) */
