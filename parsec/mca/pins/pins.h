@@ -14,19 +14,38 @@
 #define PARSEC_PINS_SEPARATOR ";"
 
 struct parsec_pins_next_callback_s;
+struct parsec_flow_s;
+struct parsec_data_s;
+
 typedef void (*parsec_pins_empty_callback_t)(struct parsec_pins_next_callback_s* cb_data,
                                              struct parsec_execution_stream_s*   es);
 typedef void (*parsec_pins_task_callback_t)(struct parsec_pins_next_callback_s* cb_data,
                                             struct parsec_execution_stream_s*   es,
                                             struct parsec_task_s*               task);
-typedef void (*parsec_pins_two_task_callback_t)(struct parsec_pins_next_callback_s* cb_data,
-                                                struct parsec_execution_stream_s*   es,
-                                                struct parsec_task_s*               task1,
-                                                struct parsec_task_s*               task2);
+typedef void (*parsec_pins_dc_to_dag_callback_t)(struct parsec_pins_next_callback_s* cb_data,
+                                                 struct parsec_execution_stream_s*   es,
+                                                 const struct parsec_task_s*         task,
+                                                 const struct parsec_data_s         *data,
+                                                 const struct parsec_flow_s         *flow,
+                                                 int                                 direct_reference);
+typedef void (*parsec_pins_dag_to_dc_callback_t)(struct parsec_pins_next_callback_s* cb_data,
+                                                 struct parsec_execution_stream_s*   es,
+                                                 const struct parsec_task_s*         task,
+                                                 const struct parsec_data_s         *data,
+                                                 const struct parsec_flow_s         *flow);
+typedef void (*parsec_pins_dependency_callback_t)(struct parsec_pins_next_callback_s* cb_data,
+                                                  struct parsec_execution_stream_s*   es,
+                                                  const struct parsec_task_s*         src_task,
+                                                  const struct parsec_task_s*         dst_task,
+                                                  int                                 activation,
+                                                  const struct parsec_flow_s*         src_flow,
+                                                  const struct parsec_flow_s*         dst_flow);
 typedef union {
-    parsec_pins_empty_callback_t    parsec_pins_empty_callback;
-    parsec_pins_task_callback_t     parsec_pins_task_callback;
-    parsec_pins_two_task_callback_t parsec_pins_two_task_callback;
+    parsec_pins_empty_callback_t      parsec_pins_empty_callback;
+    parsec_pins_task_callback_t       parsec_pins_task_callback;
+    parsec_pins_dependency_callback_t parsec_pins_dependency_callback;
+    parsec_pins_dc_to_dag_callback_t  parsec_pins_dc_to_dag_callback;
+    parsec_pins_dag_to_dc_callback_t  parsec_pins_dag_to_dc_callback;
 } parsec_pins_callback;
 
 typedef struct parsec_pins_next_callback_s {
@@ -71,6 +90,12 @@ typedef enum PARSEC_PINS_FLAG {
 #define THREAD_INIT_PINS_FCT_TYPE parsec_pins_empty_callback
         THREAD_FINI,         // Similar to above, for thread finalization.
 #define THREAD_FINI_PINS_FCT_TYPE parsec_pins_empty_callback
+        TASK_DEPENDENCY,     // Called when a task discovers it provides data (or control) to another task. Parameters:
+#define TASK_DEPENDENCY_PINS_FCT_TYPE parsec_pins_dependency_callback
+        DATA_COLLECTION_INPUT, // called when a data from a data collection flows in the DAG for the first time. Parameters: task, data, flow, and an int that says it's a direct_reference
+#define DATA_COLLECTION_INPUT_PINS_FCT_TYPE parsec_pins_dc_to_dag_callback
+        DATA_COLLECTION_OUTPUT, // called when a data flows from the DAG into the data collection. Parameters: task, data, flow
+#define DATA_COLLECTION_OUTPUT_PINS_FCT_TYPE parsec_pins_dag_to_dc_callback
     /* PARSEC_PINS_FLAG_COUNT is not an event at all */
     PARSEC_PINS_FLAG_COUNT
 } PARSEC_PINS_FLAG;
@@ -78,7 +103,7 @@ typedef enum PARSEC_PINS_FLAG {
 extern uint64_t parsec_pins_enable_mask;
 extern const char *parsec_pins_enable_default_names;
 
-#define PARSEC_PINS_FLAG_MASK(_flag) ((_flag)>>1)
+#define PARSEC_PINS_FLAG_MASK(_flag) (1<<(_flag))
 #define PARSEC_PINS_FLAG_ENABLED(_flag) (parsec_pins_enable_mask & PARSEC_PINS_FLAG_MASK(_flag))
 
 BEGIN_C_DECLS
@@ -195,7 +220,9 @@ PARSEC_PINS_FLAG parsec_pins_name_to_begin_flag(const char *name);
 /* We need one such converter per type used, to allow for type-checking */
 PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_empty_callback);
 PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_task_callback);
-PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_two_task_callback);
+PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_dependency_callback);
+PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_dc_to_dag_callback);
+PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_dag_to_dc_callback);
 /* If you do not want to use the enum name but the enum value you need to
  * use this explicit macro and pass the name of the field that describes the
  * type of function expected in the PARSEC_PINS call */
