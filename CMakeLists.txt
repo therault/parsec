@@ -244,8 +244,6 @@ option(PARSEC_PROF_RUSAGE_EU
 option(PARSEC_PROF_TRACE_SCHEDULING_EVENTS
   "Enable the tracing of fine-grained scheduling details during execution" OFF)
 mark_as_advanced(PARSEC_PROF_TRACE_SCHEDULING_EVENTS)
-option(PARSEC_PROF_GRAPHER
-  "Enable the generation of the dot graph representation during execution" OFF)
 option(PARSEC_PROF_DRY_RUN
   "Disable calls to the actual bodies and do not move the data between nodes; unfold the dependencies only" OFF)
 option(PARSEC_PROF_DRY_BODY

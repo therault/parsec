@@ -5563,9 +5563,7 @@ jdf_generate_code_call_initialization(const jdf_t *jdf, const jdf_call_t *call,
         /* Memory references */
         if ( call->parameters != NULL) {
             /* Code to create & fulfill a reshape promise locally in case this input dependency is typed */
-            coutput("#if defined(PARSEC_PROF_GRAPHER) && defined(PARSEC_PROF_TRACE)\n"
-                    "%s  parsec_prof_grapher_data_input(data_of_%s(%s), (parsec_task_t*)this_task, &%s, 1);\n"
-                    "#endif\n",
+            coutput("%s  PARSEC_PINS(DATA_COLLECTION_INPUT, es, (parsec_task_t*)this_task, data_of_%s(%s), &%s, 1);\n",
                     spaces,
                     call->func_or_mem, UTIL_DUMP_LIST(sa, call->parameters, next,
                                                       dump_expr, (void*)&info, "", "", ", ", ""),
@@ -5636,9 +5634,7 @@ jdf_generate_code_call_initialization(const jdf_t *jdf, const jdf_call_t *call,
         /* Code to create & fulfill a reshape promise locally in case this input dependency is typed */
         jdf_generate_code_reshape_input_from_dep(jdf, f, flow, dl, spaces);
         coutput("%s    this_task->data._f_%s.data_out = parsec_data_get_copy(chunk->original, target_device);\n"
-                "#if defined(PARSEC_PROF_GRAPHER) && defined(PARSEC_PROF_TRACE)\n"
-                "%s    parsec_prof_grapher_data_input(chunk->original, (parsec_task_t*)this_task, &%s, 0);\n"
-                "#endif\n"
+                "%s    PARSEC_PINS(DATA_COLLECTION_INPUT, es, (parsec_task_t*)this_task, chunk->original, &%s, 0);\n"
                 "%s  }\n",
                 spaces, flow->varname,
                 spaces, JDF_OBJECT_ONAME( flow ),
@@ -6049,9 +6045,7 @@ static void jdf_generate_code_call_final_write(const jdf_t *jdf,
                 spaces, flow->varname,
                 spaces);
 
-        coutput("#if defined(PARSEC_PROF_GRAPHER) && defined(PARSEC_PROF_TRACE)\n"
-                "%s  parsec_prof_grapher_data_output((parsec_task_t*)this_task, data_of_%s(%s), &flow_of_%s_%s_for_%s);\n"
-                "#endif\n",
+        coutput("%s  PARSEC_PINS(DATA_COLLECTION_OUTPUT, es, (parsec_task_t*)this_task, data_of_%s(%s), &flow_of_%s_%s_for_%s);\n",
                 spaces, call->func_or_mem, string_arena_get_string(sa), jdf_basename, f->fname, flow->varname);
     }
 
@@ -6140,18 +6134,6 @@ static void jdf_generate_code_dry_run_after(const jdf_t *jdf, const jdf_function
     (void)f;
 
     coutput("\n\n#endif /*!defined(PARSEC_PROF_DRY_BODY)*/\n\n");
-}
-
-static void jdf_generate_code_grapher_task_done(const jdf_t *jdf, const jdf_function_entry_t *f, const char* context_name)
-{
-    (void)jdf;
-
-    coutput("#if defined(PARSEC_PROF_GRAPHER)\n"
-            "  parsec_prof_grapher_task((parsec_task_t*)%s, es->th_id, es->virtual_process->vp_id,\n"
-            "     %s.key_hash(%s->task_class->make_key( (parsec_taskpool_t*)%s->taskpool, ((parsec_task_t*)%s)->locals), NULL));\n"
-            "#endif  /* defined(PARSEC_PROF_GRAPHER) */\n",
-            context_name,
-            jdf_property_get_string(f->properties, JDF_PROP_UD_HASH_STRUCT_NAME, NULL), context_name, context_name, context_name);
 }
 
 static void jdf_generate_code_cache_awareness_update(const jdf_t *jdf, const jdf_function_entry_t *f)
@@ -7140,8 +7122,6 @@ jdf_generate_code_complete_hook(const jdf_t *jdf,
             UTIL_DUMP_LIST_FIELD(sa, f->locals, next, name,
                                  dump_string, NULL, "", "  (void)", ";", ";\n"));
     coutput("#endif /* DISTRIBUTED */\n");
-
-    jdf_generate_code_grapher_task_done(jdf, f, "this_task");
 
     jdf_generate_code_call_release_dependencies(jdf, f, "this_task");
 

@@ -1599,22 +1599,16 @@ dtd_release_dep_fct(parsec_execution_stream_t *es,
     if( parsec_dtd_task_is_local(current_task)) {
         not_ready = parsec_atomic_fetch_dec_int32(&current_task->flow_count) - 1;
 
-#if defined(PARSEC_PROF_GRAPHER)
         /* Check to not print stuff redundantly */
-        parsec_flow_t *origin_flow = (parsec_flow_t*) calloc(1, sizeof(parsec_flow_t));
-        parsec_flow_t *dest_flow = (parsec_flow_t*) calloc(1, sizeof(parsec_flow_t));
+        parsec_flow_t origin_flow;
+        parsec_flow_t dest_flow;
 
-        origin_flow->name = "A";
-        dest_flow->name = "A";
-        dest_flow->flow_flags = PARSEC_FLOW_ACCESS_RW;
+        origin_flow.name = "N/A";
+        dest_flow.name = "N/A";
+        dest_flow.flow_flags = PARSEC_FLOW_ACCESS_RW;
 
-        parsec_prof_grapher_dep(oldcontext, newcontext, !not_ready, origin_flow, dest_flow);
+        PARSEC_PINS(TASK_DEPENDENCY, es, oldcontext, newcontext, !not_ready, &origin_flow, &dest_flow);
 
-        free(origin_flow);
-        free(dest_flow);
-#else
-        (void)dep;
-#endif
         if( !not_ready ) {
             assert(parsec_dtd_task_is_local(current_task));
 #if defined(PARSEC_DEBUG_NOISIER)
@@ -1813,11 +1807,6 @@ complete_hook_of_dtd(parsec_execution_stream_t *es,
                          this_dtd_task->ht_item.key,
                          parsec_atomic_fetch_inc_int32(&atomic_internal_counter) + 1,
                          this_task->taskpool->context->my_rank);
-
-#if defined(PARSEC_PROF_GRAPHER)
-    parsec_prof_grapher_task(this_task, es->th_id, es->virtual_process->vp_id,
-                             this_task->task_class->key_functions->key_hash(this_task->task_class->make_key( this_task->taskpool, this_task->locals ), NULL));
-#endif /* defined(PARSEC_PROF_GRAPHER) */
 
     /* constructing action_mask for all flows of local task */
     int current_dep;
