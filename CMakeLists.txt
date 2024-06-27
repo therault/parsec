@@ -306,8 +306,8 @@ if( PARSEC_PROF_TASKSTUBS )
   FetchContent_Declare(
         taskstubs
         QUIET
-        GIT_REPOSITORY      https://github.com/therault/taskStubs.git
-        GIT_TAG             e76ed0ec8a0fce7629cc0dcc141425b13dce5d7a
+        GIT_REPOSITORY      https://github.com/khuck/taskStubs.git
+        GIT_TAG             main
   )
   FetchContent_MakeAvailable(taskstubs)
 endif( PARSEC_PROF_TASKSTUBS )
