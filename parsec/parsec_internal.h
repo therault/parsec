@@ -533,6 +533,8 @@ struct parsec_minimal_execution_context_s {
     PARSEC_MINIMAL_EXECUTION_CONTEXT
 #if defined(PARSEC_PROF_TASKSTUBS)
     tasktimer_timer_t taskstub_timer;
+#else
+#error "This should be defined in all cases"
 #endif /* defined(PARSEC_PROF_TASKSTUBS) */
 #if defined(PARSEC_PROF_TRACE)
     parsec_task_prof_info_t         prof_info;
@@ -546,6 +548,8 @@ struct parsec_task_s {
     PARSEC_MINIMAL_EXECUTION_CONTEXT
 #if defined(PARSEC_PROF_TASKSTUBS)
     tasktimer_timer_t taskstub_timer;
+#else
+#error "This should be defined in all cases"
 #endif /* defined(PARSEC_PROF_TASKSTUBS) */
 #if defined(PARSEC_PROF_TRACE)
     parsec_task_prof_info_t    prof_info;
