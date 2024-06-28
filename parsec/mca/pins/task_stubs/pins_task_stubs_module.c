@@ -64,9 +64,15 @@ static void task_stubs_exec_begin(parsec_pins_next_callback_t* data,
                                   parsec_task_t* task)
 {
     tasktimer_execution_space_t resource;
-    resource.type = TASKTIMER_DEVICE_CPU;
-    resource.device_id = es->virtual_process->parsec_context->my_rank;
-    resource.instance_id = es->th_id;
+    if(NULL != task->selected_device && PARSEC_DEV_IS_GPU(task->selected_device->type)) {
+        resource.type = TASKTIMER_DEVICE_GPU;
+        resource.device_id = es->virtual_process->parsec_context->my_rank;
+        resource.instance_id = task->selected_device->device_index; // TODO: need to convert the PaRSEC device index to something consistent with the tool
+    } else {
+        resource.type = TASKTIMER_DEVICE_CPU;
+        resource.device_id = es->virtual_process->parsec_context->my_rank;
+        resource.instance_id = es->th_id;
+    }
     TASKTIMER_START(task->taskstubs_timer, &resource);
     (void)data;
 }
