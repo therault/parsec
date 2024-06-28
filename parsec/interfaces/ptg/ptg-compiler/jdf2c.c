@@ -1391,6 +1391,9 @@ static inline char* jdf_generate_task_typedef(void **elt, void* arg)
                             parsec_get_name(NULL, f, "data_t"));
     string_arena_add_string(sa, "typedef struct %s {\n"
                             "    PARSEC_MINIMAL_EXECUTION_CONTEXT\n"
+                            "#if defined(PARSEC_PROF_TASKSTUBS)\n"
+                            "    tasktimer_timer_t taskstub_timer;\n"
+                            "#endif /* defined(PARSEC_PROF_TASKSTUBS) */\n"
                             "#if defined(PARSEC_PROF_TRACE)\n"
                             "    parsec_task_prof_info_t prof_info;\n"
                             "#endif /* defined(PARSEC_PROF_TRACE) */\n"
