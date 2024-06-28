@@ -45,7 +45,7 @@ static void task_stubs_dep(struct parsec_pins_next_callback_s* cb_data,
                            const parsec_flow_t* origin_flow, const parsec_flow_t* dest_flow)
 {
     uint64_t child_guid[1] = { to->task_class->make_key(to->taskpool, to->locals) };
-    TASKTIMER_ADD_CHILDREN(from->taskstubs_timer, child_guid, 1);
+    TASKTIMER_ADD_CHILDREN(from->taskstub_timer, child_guid, 1);
     (void)cb_data; (void)es; (void)dependency_activates_task; (void)origin_flow; (void)dest_flow;
 }
 
@@ -54,8 +54,9 @@ static void task_stubs_prepare_input_begin(parsec_pins_next_callback_t* data,
                                            parsec_task_t* task)
 {
     uint64_t myguid = task->task_class->make_key(task->taskpool, task->locals);
-    TASKTIMER_CREATE(task->task_class->incarnations[0].hook, task->task_class->name, myguid, NULL, 0, task->taskstubs_timer);
-    TASKTIMER_SCHEDULE(task->taskstubs_timer, NULL, 0);
+    TASKTIMER_CREATE(task->task_class->incarnations[0].hook, task->task_class->name, myguid, NULL, 0, timer);
+    task->taskstub_timer = timer;
+    TASKTIMER_SCHEDULE(task->taskstub_timer, NULL, 0);
     (void)es;(void)data;
 }
 
@@ -73,7 +74,7 @@ static void task_stubs_exec_begin(parsec_pins_next_callback_t* data,
         resource.device_id = es->virtual_process->parsec_context->my_rank;
         resource.instance_id = es->th_id;
     }
-    TASKTIMER_START(task->taskstubs_timer, &resource);
+    TASKTIMER_START(task->taskstub_timer, &resource);
     (void)data;
 }
 
@@ -81,7 +82,7 @@ static void task_stubs_exec_end(parsec_pins_next_callback_t* data,
                                 parsec_execution_stream_t* es,
                                 parsec_task_t* task)
 {
-    TASKTIMER_STOP(task->taskstubs_timer);
+    TASKTIMER_STOP(task->taskstub_timer);
     (void)es;(void)data;
 }
 
@@ -89,7 +90,7 @@ static void task_stubs_complete_exec_end(parsec_pins_next_callback_t* data,
                                          parsec_execution_stream_t* es,
                                          parsec_task_t* task)
 {
-    TASKTIMER_DESTROY(task->taskstubs_timer);
+    TASKTIMER_DESTROY(task->taskstub_timer);
     (void)es;(void)data;
 }
 

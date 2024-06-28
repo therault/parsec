@@ -145,6 +145,10 @@
 # define PARSEC_PROF_DRY_DEP
 #endif
 
+#if defined(PARSEC_PROF_TASKSTUBS)
+#define TASKTIMER_USE_TIMERS
+#endif
+
 #if PARSEC_DIST_SHORT_LIMIT == 0
 #define RDEP_MSG_SHORT_LIMIT    0
 #else
