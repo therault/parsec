@@ -38,13 +38,34 @@ parsec_pins_module_t parsec_pins_task_stubs_module = {
     { NULL }
 };
 
+static uint64_t task_stubs_make_guid(const struct parsec_task_s *task)
+{
+    uint64_t tuid = task->task_class->make_key(task->taskpool, task->locals);
+    uint64_t tpuid = ((uint64_t)task->taskpool->taskpool_id)<<56;
+    uint64_t tcuid = ((uint64_t)task->task_class->task_class_id) << 48;
+#if defined(PARSEC_DEBUG_NOISIER)
+    char tmp[128];
+    task->task_class->task_snprintf(tmp, 128, task);
+    PARSEC_DEBUG_VERBOSE(10, parsec_debug_output,
+                         "task_stubs create guid for %s -> tuid %"PRIx64" tpuid %"PRIx64" tcuid %"PRIx64" -> %"PRIx64" \n", 
+                         tmp, tuid, tpuid, tcuid, tuid|tpuid|tcuid);
+#endif
+    return tuid | tpuid | tcuid;
+ }
+
 static void task_stubs_dep(struct parsec_pins_next_callback_s* cb_data,
                            struct parsec_execution_stream_s*   es,
                            const parsec_task_t* from, const parsec_task_t* to,
                            int dependency_activates_task,
                            const parsec_flow_t* origin_flow, const parsec_flow_t* dest_flow)
 {
-    uint64_t child_guid[1] = { to->task_class->make_key(to->taskpool, to->locals) };
+    if(from->task_class->task_class_id >= from->taskpool->nb_task_classes ||
+       to->task_class->task_class_id >= to->taskpool->nb_task_classes) {
+        /* Skip startup tasks */
+        return;
+    }
+
+    uint64_t child_guid[1] = { task_stubs_make_guid(to) };
     TASKTIMER_ADD_CHILDREN(from->taskstub_timer, child_guid, 1);
     (void)cb_data; (void)es; (void)dependency_activates_task; (void)origin_flow; (void)dest_flow;
 }
@@ -53,7 +74,12 @@ static void task_stubs_prepare_input_begin(parsec_pins_next_callback_t* data,
                                            parsec_execution_stream_t* es,
                                            parsec_task_t* task)
 {
-    uint64_t myguid = task->task_class->make_key(task->taskpool, task->locals);
+    if(task->task_class->task_class_id >= task->taskpool->nb_task_classes) {
+        /* Skip startup tasks */
+        return;
+    }
+
+    uint64_t myguid = task_stubs_make_guid(task);
     TASKTIMER_CREATE(task->task_class->incarnations[0].hook, task->task_class->name, myguid, NULL, 0, timer);
     task->taskstub_timer = timer;
     TASKTIMER_SCHEDULE(task->taskstub_timer, NULL, 0);
@@ -65,6 +91,12 @@ static void task_stubs_exec_begin(parsec_pins_next_callback_t* data,
                                   parsec_task_t* task)
 {
     tasktimer_execution_space_t resource;
+
+    if(task->task_class->task_class_id >= task->taskpool->nb_task_classes) {
+        /* Skip startup tasks */
+        return;
+    }
+
     if(NULL != task->selected_device && PARSEC_DEV_IS_GPU(task->selected_device->type)) {
         resource.type = TASKTIMER_DEVICE_GPU;
         resource.device_id = es->virtual_process->parsec_context->my_rank;
@@ -82,6 +114,11 @@ static void task_stubs_exec_end(parsec_pins_next_callback_t* data,
                                 parsec_execution_stream_t* es,
                                 parsec_task_t* task)
 {
+    if(task->task_class->task_class_id >= task->taskpool->nb_task_classes) {
+        /* Skip startup tasks */
+        return;
+    }
+
     TASKTIMER_STOP(task->taskstub_timer);
     (void)es;(void)data;
 }
@@ -90,6 +127,11 @@ static void task_stubs_complete_exec_end(parsec_pins_next_callback_t* data,
                                          parsec_execution_stream_t* es,
                                          parsec_task_t* task)
 {
+    if(task->task_class->task_class_id >= task->taskpool->nb_task_classes) {
+        /* Skip startup tasks */
+        return;
+    }
+
     TASKTIMER_DESTROY(task->taskstub_timer);
     (void)es;(void)data;
 }
