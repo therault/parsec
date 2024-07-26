@@ -16,6 +16,7 @@
 #include "parsec/parsec_binary_profile.h"
 #include "parsec/utils/argv.h"
 #include "parsec/utils/mca_param.h"
+#include "parsec/class/parsec_hash_table.h"
 
 #include "tasktimer.h"
 
@@ -53,6 +54,19 @@ static uint64_t task_stubs_make_guid(const struct parsec_task_s *task)
     return tuid | tpuid | tcuid;
  }
 
+typedef struct {
+    parsec_hash_table_item_t  ht_item;
+    int tp_id;
+    int tc_id;
+    uint64_t tuid;
+
+    int nb_parents;
+    int parent_uid_size;
+    uint64_t *parent_uid;
+} pins_task_stubs_parent_set_t;
+
+static parsec_hash_table_t pins_task_stubs_parents_table;
+
 static void task_stubs_dep(struct parsec_pins_next_callback_s* cb_data,
                            struct parsec_execution_stream_s*   es,
                            const parsec_task_t* from, const parsec_task_t* to,
@@ -65,8 +79,31 @@ static void task_stubs_dep(struct parsec_pins_next_callback_s* cb_data,
         return;
     }
 
-    uint64_t child_guid[1] = { task_stubs_make_guid(to) };
-    TASKTIMER_ADD_CHILDREN(from->taskstub_timer, child_guid, 1);
+    uint64_t child_guid = task_stubs_make_guid(to);
+    uint64_t parent_guid = task_stubs_make_guid(from);
+    parsec_key_handle_t kh;
+    parsec_hash_table_lock_bucket_handle(&pins_task_stubs_parents_table, child_guid, &kh);
+    pins_task_stubs_parent_set_t *parent_set = (pins_task_stubs_parent_set_t*) parsec_hash_table_nolock_find(&pins_task_stubs_parents_table, child_guid);
+    if(NULL == parent_set) {
+        parent_set = malloc(sizeof(pins_task_stubs_parent_set_t));
+        parent_set->tc_id = to->task_class->task_class_id;
+        parent_set->tp_id = to->taskpool->taskpool_id;
+        parent_set->tuid  = to->task_class->make_key(to->taskpool, to->locals);
+        parent_set->ht_item.key = child_guid;
+        parent_set->nb_parents = 1;
+        parent_set->parent_uid_size = 8;
+        parent_set->parent_uid = (uint64_t*)malloc(parent_set->parent_uid_size * sizeof(uint64_t));
+        parent_set->parent_uid[0] = parent_guid;
+        parsec_hash_table_nolock_insert(&pins_task_stubs_parents_table, &parent_set->ht_item);
+    } else {
+        if(parent_set->nb_parents + 1 >= parent_set->parent_uid_size) {
+            parent_set->parent_uid_size += 8;
+            parent_set->parent_uid = (uint64_t*)realloc(parent_set->parent_uid, parent_set->parent_uid_size * sizeof(uint64_t));
+        }
+        parent_set->parent_uid[parent_set->nb_parents] = parent_guid;
+        parent_set->nb_parents++;
+    }
+    parsec_hash_table_unlock_bucket_handle(&pins_task_stubs_parents_table, &kh);
     (void)cb_data; (void)es; (void)dependency_activates_task; (void)origin_flow; (void)dest_flow;
 }
 
@@ -80,9 +117,28 @@ static void task_stubs_prepare_input_begin(parsec_pins_next_callback_t* data,
     }
 
     uint64_t myguid = task_stubs_make_guid(task);
-    TASKTIMER_CREATE(task->task_class->incarnations[0].hook, task->task_class->name, myguid, NULL, 0, timer);
+    pins_task_stubs_parent_set_t *parent_set = (pins_task_stubs_parent_set_t*)parsec_hash_table_remove(&pins_task_stubs_parents_table, myguid);
+    tasktimer_guid_t *parents;
+    uint64_t nb_parents;
+    if(NULL == parent_set) {
+        parents = NULL;
+        nb_parents = 0;
+    } else {
+        parents = parent_set->parent_uid;
+        nb_parents = parent_set->nb_parents;
+        free(parent_set);
+    }
+    TASKTIMER_CREATE(task->task_class->incarnations[0].hook, task->task_class->name, myguid, parents, nb_parents, timer);
+    if(NULL != parents) {
+        free(parents);
+    }
     task->taskstub_timer = timer;
-    TASKTIMER_SCHEDULE(task->taskstub_timer, NULL, 0);
+    tasktimer_argument_value_t args[1];
+    char task_name[MAX_TASK_STRLEN];
+    args[0].type = TASKTIMER_STRING_TYPE;
+    parsec_task_snprintf(task_name, MAX_TASK_STRLEN, task);
+    args[0].c_value = task_name;
+    TASKTIMER_SCHEDULE(task->taskstub_timer, args, 1);
     (void)es;(void)data;
 }
 
@@ -99,12 +155,12 @@ static void task_stubs_exec_begin(parsec_pins_next_callback_t* data,
 
     if(NULL != task->selected_device && PARSEC_DEV_IS_GPU(task->selected_device->type)) {
         resource.type = TASKTIMER_DEVICE_GPU;
-        resource.device_id = es->virtual_process->parsec_context->my_rank;
-        resource.instance_id = task->selected_device->device_index; // TODO: need to convert the PaRSEC device index to something consistent with the tool
+        resource.device_id = task->selected_device->device_index; // TODO: need to convert the PaRSEC device index to something consistent with the tool
+        // TODO: instance_id: stream ID (only for GPUs)
+        resource.instance_id = 0; // Undefined at this time
     } else {
         resource.type = TASKTIMER_DEVICE_CPU;
-        resource.device_id = es->virtual_process->parsec_context->my_rank;
-        resource.instance_id = es->th_id;
+        resource.device_id = es->th_id;
     }
     TASKTIMER_START(task->taskstub_timer, &resource);
     (void)data;
@@ -139,6 +195,8 @@ static void task_stubs_complete_exec_end(parsec_pins_next_callback_t* data,
 static void pins_init_task_stubs(parsec_context_t *master_context)
 {
     (void)master_context;
+    parsec_hash_table_init(&pins_task_stubs_parents_table, offsetof(pins_task_stubs_parent_set_t, ht_item),
+                           10, parsec_hash_table_generic_key_fn, NULL);
     TASKTIMER_INITIALIZE();
 }
 
@@ -146,6 +204,7 @@ static void pins_fini_task_stubs(parsec_context_t *master_context)
 {
     (void)master_context;
     TASKTIMER_FINALIZE();
+    parsec_hash_table_fini(&pins_task_stubs_parents_table);
 }
 
 static void pins_thread_init_task_stubs(struct parsec_execution_stream_s * es)
