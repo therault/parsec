@@ -25,4 +25,8 @@ if(PARSEC_HAVE_CUDA)
   parsec_addtest_executable(C testing_get_best_device SOURCES "testing_get_best_device.c")
   target_include_directories(testing_get_best_device PRIVATE $<$<NOT:${PARSEC_BUILD_INPLACE}>:${CMAKE_CURRENT_SOURCE_DIR}>)
   target_ptg_sources(testing_get_best_device PRIVATE "get_best_device_check.jdf")
+
+  # Testing GPU Direct capabilities
+  parsec_addtest_executable(C mpi_supports_gpu_direct SOURCES mpi_supports_gpu_direct.c)
+  target_link_libraries(mpi_supports_gpu_direct PRIVATE CUDA::cudart)
 endif(PARSEC_HAVE_CUDA)
