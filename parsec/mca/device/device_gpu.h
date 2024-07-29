@@ -357,6 +357,15 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
                                 parsec_execution_stream_t *es,
                                 void *gpu_task );
 
+typedef struct {
+    parsec_execution_stream_t *es;
+    parsec_device_module_t *module;
+} parsec_device_manager_thread_param_t;
+void * parsec_device_kernel_scheduler_thread( void *gpu_manager_thread_param );
+
+/* Send the stop signal to the GPU manager of that module */
+void parsec_device_kernel_scheduler_thread_stop(parsec_device_module_t *module);
+
 /* Default stage_in function to transfer data to the GPU device.
  * Transfer transfer the <count> contiguous bytes from
  * task->data[i].data_in to task->data[i].data_out.

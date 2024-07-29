@@ -2429,11 +2429,10 @@ parsec_device_kernel_cleanout( parsec_device_gpu_module_t *gpu_device,
 parsec_hook_return_t
 parsec_device_kernel_scheduler( parsec_device_module_t *module,
                                 parsec_execution_stream_t *es,
-                                void *_gpu_task )
+                                parsec_task_t *_gpu_task )
 {
     parsec_device_gpu_module_t* gpu_device = (parsec_device_gpu_module_t *)module;
     int rc, exec_stream = 0;
-    parsec_gpu_task_t *progress_task, *out_task_submit = NULL, *out_task_pop = NULL;
     parsec_gpu_task_t *gpu_task = (parsec_gpu_task_t*)_gpu_task;
 #if defined(PARSEC_DEBUG_NOISIER)
     char tmp[MAX_TASK_STRLEN];
@@ -2449,32 +2448,50 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
                                   PARSEC_PROFILING_EVENT_RESCHEDULED );
 #endif /* defined(PARSEC_PROF_TRACE) */
 
+    /* Count new work */
+    parsec_atomic_fetch_add_int32( &gpu_device->mutex, 1 );
+    parsec_fifo_push( &(gpu_device->pending), (parsec_list_item_t*)gpu_task );
+    return PARSEC_HOOK_RETURN_ASYNC;
+}
+
+void *parsec_device_kernel_scheduler_thread( void *_thread_arg )
+{
+    parsec_device_manager_thread_param_t *param = (parsec_device_manager_thread_param_t*)_thread_arg;
+    parsec_device_gpu_module_t* gpu_device = (parsec_device_gpu_module_t *)param->module;
+    parsec_execution_stream_t *es = param->es;
+    int rc, exec_stream = 0;
+    parsec_gpu_task_t *progress_task, *out_task_submit = NULL, *out_task_pop = NULL;
+    parsec_gpu_task_t *gpu_task = NULL;
+#if defined(PARSEC_DEBUG_NOISIER)
+    char tmp[MAX_TASK_STRLEN];
+#endif
+    int pop_null = 0;
+
+    // TODO: we probably need to disable es->scheduling_object somehow...
+    // TODO: es->next_task is also definitely going to be a problem
+
+    rc = gpu_device->set_device(gpu_device);
+    if(PARSEC_SUCCESS != rc)
+        return NULL;
+
+  wait_for_termination:
     /* Check the GPU status -- three kinds of values for rc:
-     *   - rc < 0: somebody is doing a short atomic operation while there is no manager,
-     *             so wait.
-     *   - rc == 0: there is no manager, and at the exit of the while, this thread
-     *             made rc go from 0 to 1, so it is the new manager of the GPU and
-     *             needs to deal with gpu_task
-     *   - rc > 0: there is a manager, and at the exit of the while, this thread has
-     *             committed new work that the manager will need to do, but the work is
-     *             not in the queue yet.
+     *   - rc == 0: there is no work, wait for work or end of work
+     *   - rc < 0: work is done, leave
+     *   - rc > 0: there is work, process it
      */
     while(1) {
         rc = gpu_device->mutex;
         struct timespec delay;
-        if( rc >= 0 ) {
-            if( parsec_atomic_cas_int32( &gpu_device->mutex, rc, rc+1 ) ) {
-                break;
-            }
-        } else {
-            delay.tv_nsec = 100;
+        if( rc == 0 ) {
+            delay.tv_nsec = 1000;
             delay.tv_sec = 0;
             nanosleep(&delay, NULL);
+        } else if(rc > 0) {
+            break;
+        } else {
+            return NULL;
         }
-    }
-    if( 0 < rc ) {
-        parsec_fifo_push( &(gpu_device->pending), (parsec_list_item_t*)gpu_task );
-        return PARSEC_HOOK_RETURN_ASYNC;
     }
     PARSEC_DEBUG_VERBOSE(5, parsec_gpu_output_stream, "GPU[%d:%s]: Entering GPU management",
                          gpu_device->super.device_index, gpu_device->super.name);
@@ -2484,10 +2501,6 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
         PARSEC_PROFILING_TRACE( es->es_profile, parsec_gpu_own_GPU_key_start,
                                 (unsigned long)es, PROFILE_OBJECT_ID_NULL, NULL );
 #endif  /* defined(PARSEC_PROF_TRACE) */
-
-    rc = gpu_device->set_device(gpu_device);
-    if(PARSEC_SUCCESS != rc)
-        return PARSEC_HOOK_RETURN_DISABLE;
 
  check_in_deps:
     if( NULL != gpu_task ) {
@@ -2640,7 +2653,7 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
         PARSEC_DEBUG_VERBOSE(5, parsec_gpu_output_stream, "GPU[%d:%s]: Leaving GPU management",
                              gpu_device->super.device_index, gpu_device->super.name);
         /* inform the upper layer not to use the task argument, it has been long gone */
-        return PARSEC_HOOK_RETURN_ASYNC;
+        goto wait_for_termination;
     }
     gpu_task = progress_task;
     goto fetch_task_from_shared_queue;
@@ -2651,5 +2664,11 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
      */
     parsec_warning("GPU[%d:%s]: Critical issue related to the GPU discovered. Giving up",
                    gpu_device->super.device_index, gpu_device->super.name);
-    return PARSEC_HOOK_RETURN_DISABLE;
+    return NULL;
+}
+
+void parsec_device_kernel_scheduler_thread_stop(parsec_device_module_t *module)
+{
+    parsec_device_gpu_module_t* gpu_device = (parsec_device_gpu_module_t *)module;
+    parsec_atomic_fetch_dec_int32(&gpu_device->mutex);
 }
