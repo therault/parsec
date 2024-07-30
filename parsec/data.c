@@ -15,10 +15,11 @@
 #include "parsec/sys/atomic.h"
 #include "parsec/remote_dep.h"
 #include "parsec/parsec_internal.h"
+#include "parsec/utils/mca_param.h"
 
 static parsec_lifo_t parsec_data_lifo;
 static parsec_lifo_t parsec_data_copies_lifo;
-
+static int parsec_param_comm_send_prefer_gpu = 1;
 
 static void parsec_data_copy_construct(parsec_data_copy_t* obj)
 {
@@ -115,6 +116,10 @@ int parsec_data_init(parsec_context_t* context)
 {
     PARSEC_OBJ_CONSTRUCT(&parsec_data_lifo, parsec_lifo_t);
     PARSEC_OBJ_CONSTRUCT(&parsec_data_copies_lifo, parsec_lifo_t);
+
+    parsec_mca_param_reg_int_name("runtime", "comm_send_prefer_gpu", "When sending data, prefer to send the GPU copy if available (1=true,0=false).",
+                                  false, false, parsec_param_comm_send_prefer_gpu, &parsec_param_comm_send_prefer_gpu);
+
     /**
      * This is a trick. Now that we know the number of available devices
      * we can update the size of the parsec_data_t class to the correct value.
@@ -469,13 +474,20 @@ parsec_data_get_copy(parsec_data_t* data, uint32_t device)
 parsec_data_copy_t*
 parsec_data_get_best_copy_for_send(parsec_data_copy_t* src)
 {
-    if(src->coherency_state != PARSEC_DATA_COHERENCY_SHARED)
+    static int last_dev = 0;
+    if(!parsec_param_comm_send_prefer_gpu)
         return src;
-    for(int i = 0; i < parsec_nb_devices; i++) {
+    if(NULL == src || src->coherency_state != PARSEC_DATA_COHERENCY_SHARED)
+        return src;
+    for(uint32_t i = (last_dev+1) % parsec_nb_devices; i != last_dev % parsec_nb_devices; i = (i + 1) % parsec_nb_devices) {
         parsec_data_copy_t *copy = src->original->device_copies[i];
         if(NULL == copy || src == copy) continue;
         if(copy->coherency_state != PARSEC_DATA_COHERENCY_SHARED || copy->version != src->version) continue;
-        if(parsec_mca_device_is_gpu(copy->device_index)) return copy;
+        if(parsec_mca_device_is_gpu(copy->device_index)) {
+            fprintf(stderr, "%s returns %p instead of %p\n", __FUNCTION__, copy, src );
+            last_dev = i;
+            return copy;
+        }
     }
     return src;
 }
