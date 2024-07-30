@@ -7728,7 +7728,7 @@ jdf_generate_code_iterate_successors_or_predecessors(const jdf_t *jdf,
         nb_open_ldef = 0;
 
         string_arena_add_string(sa_coutput,
-                "    data.data   = parsec_data_get_best_copy_for_send(this_task->data._f_%s.data_out);\n"
+                "    data.data   = this_task->data._f_%s.data_out;\n"
                 "    data.data_future  = NULL;\n",
                 fl->varname);
 
