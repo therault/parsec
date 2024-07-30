@@ -466,6 +466,20 @@ parsec_data_get_copy(parsec_data_t* data, uint32_t device)
     return PARSEC_DATA_GET_COPY(data, device);
 }
 
+parsec_data_copy_t*
+parsec_data_get_best_copy_for_send(parsec_data_copy_t* src)
+{
+    if(src->coherency_state != PARSEC_DATA_COHERENCY_SHARED)
+        return src;
+    for(int i = 0; i < parsec_nb_devices; i++) {
+        parsec_data_copy_t *copy = src->original->device_copies[i];
+        if(NULL == copy || src == copy) continue;
+        if(copy->coherency_state != PARSEC_DATA_COHERENCY_SHARED || copy->version != src->version) continue;
+        if(parsec_mca_device_is_gpu(copy->device_index)) return copy;
+    }
+    return src;
+}
+
 void parsec_data_copy_release(parsec_data_copy_t* copy)
 {
     /* TODO: Move the copy back to the CPU before destroying it */

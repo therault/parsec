@@ -1044,6 +1044,7 @@ parsec_device_data_reserve_space( parsec_device_gpu_module_t* gpu_device,
                 }
                 copy_readers_update = PARSEC_DEVICE_DATA_COPY_ATOMIC_SENTINEL;
                 /* Check if this copy is the last dangling reference to the oldmaster. This is safe to do as we own one of the data refcounts. */
+                PARSEC_OBJ_RELEASE(oldmaster->device_copies[0]);
                 int do_unlock = oldmaster->super.obj_reference_count != 1;
                 parsec_data_copy_detach(oldmaster, lru_gpu_elem, gpu_device->super.device_index);
                 parsec_atomic_wmb();
@@ -1132,6 +1133,8 @@ parsec_device_data_reserve_space( parsec_device_gpu_module_t* gpu_device,
                              "GPU[%d:%s]: GPU copy %p [ref_count %d] gets created with version 0",
                              gpu_device->super.device_index, gpu_device->super.name,
                              gpu_elem, gpu_elem->super.super.obj_reference_count);
+        /* A GPU copy must have a CPU shadow, retain it for the case it is NEW */
+        PARSEC_OBJ_RETAIN(master->device_copies[0]);
         parsec_data_copy_attach(master, gpu_elem, gpu_device->super.device_index);
         this_task->data[i].data_out = gpu_elem;
         /* set the new datacopy type to the correct one */
@@ -2311,6 +2314,7 @@ parsec_device_kernel_epilog( parsec_device_gpu_module_t *gpu_device,
          *        same state as the GPU to prevent an extra data movement.
          */
         assert( PARSEC_DATA_COHERENCY_OWNED == gpu_copy->coherency_state );
+#if 0
         gpu_copy->coherency_state = PARSEC_DATA_COHERENCY_SHARED;
         cpu_copy->coherency_state = PARSEC_DATA_COHERENCY_SHARED;
 
@@ -2325,10 +2329,21 @@ parsec_device_kernel_epilog( parsec_device_gpu_module_t *gpu_device,
          * data is now on the CPU.
          */
         this_task->data[i].data_out = cpu_copy;
+#endif
 
         assert( 0 <= gpu_copy->readers );
 
         if( gpu_task->pushout & (1 << i) ) {
+            gpu_copy->coherency_state = PARSEC_DATA_COHERENCY_SHARED;
+            cpu_copy->coherency_state = PARSEC_DATA_COHERENCY_SHARED;
+
+            cpu_copy->version = gpu_copy->version;
+            PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
+                                 "GPU[%d:%s]: CPU copy %p [ref_count %d] gets the same version %d as GPU copy %p [ref_count %d]",
+                                 gpu_device->super.device_index, gpu_device->super.name,
+                                 cpu_copy, cpu_copy->super.super.obj_reference_count, cpu_copy->version, gpu_copy, gpu_copy->super.super.obj_reference_count);
+            this_task->data[i].data_out = cpu_copy;
+
             PARSEC_DEBUG_VERBOSE(20, parsec_gpu_output_stream,
                                  "GPU copy %p [ref_count %d] moved to the read LRU in %s",
                                  gpu_copy, gpu_copy->super.super.obj_reference_count, __func__);
@@ -2393,6 +2408,7 @@ parsec_device_kernel_cleanout( parsec_device_gpu_module_t *gpu_device,
         gpu_copy = this_task->data[i].data_out;
         original = gpu_copy->original;
         parsec_atomic_lock(&original->lock);
+        PARSEC_OBJ_RELEASE(original->device_copies[0]);
         assert(gpu_copy->super.super.obj_reference_count > 1);
         /* Issue #134 */
         parsec_data_copy_detach(original, gpu_copy, gpu_device->super.device_index);
