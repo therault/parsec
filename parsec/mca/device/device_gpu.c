@@ -1439,7 +1439,10 @@ parsec_device_data_stage_in( parsec_device_gpu_module_t* gpu_device,
             PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,
                                  "GPU[%d:%s]:\tThere is a potential alternative source for data_in %p [ref_count %d] in original %p to go in copy %p [ref_count %d], but it is not ready, falling back on CPU source",
                                  gpu_device->super.device_index, gpu_device->super.name, task_data->data_in, task_data->data_in->super.super.obj_reference_count, original, gpu_elem, gpu_elem->super.super.obj_reference_count);
+            /* TODO: test this 
+            PARSEC_DATA_UNLOCK(original);
             return PARSEC_HOOK_RETURN_AGAIN;
+            */
         }
 
         /* We fall back on the CPU copy */
@@ -1891,9 +1894,9 @@ parsec_device_progress_stream( parsec_device_gpu_module_t* gpu_device,
     rc = progress_fct( gpu_device, task, stream );
     if(0 == rc) {
         /* If progress_fct added nothing on that stream, we skip scheduling a record on the GPU stream */
-        if( task->complete_stage )
-            rc = task->complete_stage(gpu_device, &task, stream);
         *out_task = task;
+        if( task->complete_stage )
+            rc = task->complete_stage(gpu_device, out_task, stream);
         return rc;
     }
     if( 0 > rc ) {
