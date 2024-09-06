@@ -68,7 +68,7 @@ static void parsec_data_construct(parsec_data_t* obj )
     for( uint32_t i = 0; i < parsec_nb_devices;
          obj->device_copies[i] = NULL, i++ );
     obj->dc               = NULL;
-    obj->lock             = unlocked; /* Can't directly assign to PARSEC_ATOMIC_UNLOCKED because of C syntax */
+    PARSEC_DATA_SET_LOCK(obj, unlocked); /* Can't directly assign to PARSEC_ATOMIC_UNLOCKED because of C syntax */
     PARSEC_DEBUG_VERBOSE(20, parsec_debug_output, "Allocate data %p", obj);
 }
 
@@ -288,10 +288,10 @@ int parsec_data_transfer_ownership_to_copy(parsec_data_t* data,
                                            uint8_t access_mode)
 {
     int transfer_required;
-    parsec_atomic_lock(&data->lock);
+    PARSEC_DATA_LOCK(data);
     transfer_required = parsec_data_start_transfer_ownership_to_copy(data, device, access_mode);
     parsec_data_end_transfer_ownership_to_copy(data, device, access_mode);
-    parsec_atomic_unlock(&data->lock);
+    PARSEC_DATA_UNLOCK(data);
     return transfer_required;
 }
 

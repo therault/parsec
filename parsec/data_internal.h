@@ -28,7 +28,11 @@
 struct parsec_data_s {
     parsec_object_t            super;
 
-    parsec_atomic_lock_t       lock;
+    parsec_atomic_lock_t       tlock;
+#if defined(PARSEC_DEBUG_NOISIER)
+    const char *tlock_last_change_file;
+    int         tlock_last_change_line;
+#endif
 
     parsec_data_key_t          key;
     int8_t                     owner_device;
@@ -43,6 +47,47 @@ struct parsec_data_s {
                                                   */
 };
 PARSEC_DECLSPEC PARSEC_OBJ_CLASS_DECLARATION(parsec_data_t);
+
+#if defined(PARSEC_DEBUG_NOISIER)
+#define PARSEC_DATA_SET_LOCK(dta, value) parsec_data_set_lock_impl(dta, value, __FILE__, __LINE__)
+static inline void parsec_data_set_lock_impl(parsec_data_t *dta, parsec_atomic_lock_t value, const char *file, int line)
+{
+    dta->tlock = value;
+    dta->tlock_last_change_file = file;
+    dta->tlock_last_change_line = line;
+}
+#define PARSEC_DATA_TRYLOCK(dta) parsec_data_trylock_impl(dta, __FILE__, __LINE__)
+static inline int parsec_data_trylock_impl(parsec_data_t *dta, const char *file, int line)
+{
+    int rc = parsec_atomic_trylock(&dta->tlock);
+    if(rc) {
+        dta->tlock_last_change_file = file;
+        dta->tlock_last_change_line = line;
+    }
+    return rc;
+}
+#define PARSEC_DATA_LOCK(dta) parsec_data_lock_impl(dta, __FILE__, __LINE__)
+static inline void parsec_data_lock_impl(parsec_data_t *dta, const char *file, int line)
+{
+    parsec_atomic_lock( &dta->tlock );
+    dta->tlock_last_change_file = file;
+    dta->tlock_last_change_line = line;
+}
+#define PARSEC_DATA_UNLOCK(dta) parsec_data_unlock_impl(dta, __FILE__, __LINE__)
+static inline void parsec_data_unlock_impl(parsec_data_t *dta, const char *file, int line)
+{
+    parsec_atomic_unlock( &dta->tlock );
+    dta->tlock_last_change_file = file;
+    dta->tlock_last_change_line = line;
+}
+#else
+#define PARSEC_DATA_SET_LOCK(dta, value) do { (dta)->tlock = (value); } while(0)
+#define PARSEC_DATA_LOCK(dta) do { parsec_atomic_lock( &(dta)->tlock ); } while(0)
+static inline int PARSEC_DATA_TRYLOCK(parsec_data_t *dta) {
+    return parsec_atomic_trylock(&dta->tlock);
+}
+#define PARSEC_DATA_UNLOCK(dta) do { parsec_atomic_unlock( &(dta)->tlock ); } while(0)
+#endif
 
 /**
  * This structure represent a device copy of a parsec_data_t.

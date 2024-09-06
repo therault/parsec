@@ -238,14 +238,14 @@ parsec_gpu_create_w2r_task(parsec_device_gpu_module_t *gpu_device,
             break;
         }
         gpu_copy = (parsec_gpu_data_copy_t*)item;
-        parsec_atomic_lock( &gpu_copy->original->lock );
+        PARSEC_DATA_LOCK(gpu_copy->original);
         /* get the next item before altering the next pointer */
         item = (parsec_list_item_t*)item->list_next;  /* conversion needed for volatile */
         if( 0 == gpu_copy->readers ) {
             if( PARSEC_UNLIKELY(NULL == d2h_task) ) {  /* allocate on-demand */
                 d2h_task = (parsec_gpu_d2h_task_t*)parsec_thread_mempool_allocate(es->context_mempool);
                 if( PARSEC_UNLIKELY(NULL == d2h_task) ) { /* we're running out of memory. Bail out. */
-                    parsec_atomic_unlock( &gpu_copy->original->lock );
+                    PARSEC_DATA_UNLOCK(gpu_copy->original);
                     return NULL;
                 }
                 PARSEC_OBJ_CONSTRUCT(d2h_task, parsec_task_t);
@@ -255,7 +255,7 @@ parsec_gpu_create_w2r_task(parsec_device_gpu_module_t *gpu_device,
             gpu_copy->readers++;
             d2h_task->data[nb_cleaned].data_out = gpu_copy;
             gpu_copy->data_transfer_status = PARSEC_DATA_STATUS_UNDER_TRANSFER;  /* mark the copy as in transfer */
-            parsec_atomic_unlock( &gpu_copy->original->lock );
+            PARSEC_DATA_UNLOCK(gpu_copy->original);
             PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,  "D2H[%d:%s] task %p:\tdata %d -> %p [%p] readers %d",
                                  gpu_device->super.device_index, gpu_device->super.name, (void*)d2h_task,
                                  nb_cleaned, gpu_copy, gpu_copy->original, gpu_copy->readers);
@@ -302,7 +302,7 @@ int parsec_gpu_complete_w2r_task(parsec_device_gpu_module_t *gpu_device,
     assert(gpu_task->task_type == PARSEC_GPU_TASK_TYPE_D2HTRANSFER);
     for( int i = 0; i < task->locals[0].value; i++ ) {
         gpu_copy = task->data[i].data_out;
-        parsec_atomic_lock(&gpu_copy->original->lock);
+        PARSEC_DATA_LOCK(gpu_copy->original);
         gpu_copy->readers--;
         gpu_copy->data_transfer_status = PARSEC_DATA_STATUS_COMPLETE_TRANSFER;
         gpu_device->super.data_out_to_host += gpu_copy->original->nb_elts; /* TODO: not hardcoded, use datatype size */
@@ -331,7 +331,7 @@ int parsec_gpu_complete_w2r_task(parsec_device_gpu_module_t *gpu_device,
                                  gpu_device->super.device_index, gpu_device->super.name, (void*)task, i, gpu_copy, gpu_copy->original);
             parsec_list_push_back(&gpu_device->gpu_mem_lru, (parsec_list_item_t*)gpu_copy);
         }
-        parsec_atomic_unlock(&gpu_copy->original->lock);
+        PARSEC_DATA_UNLOCK(gpu_copy->original);
     }
     parsec_thread_mempool_free(es->context_mempool, task);
     free(gpu_task);
