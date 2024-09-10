@@ -1822,73 +1822,95 @@ parsec_device_progress_stream( parsec_device_gpu_module_t* gpu_device,
                                parsec_gpu_exec_stream_t* stream,
                                parsec_gpu_step_function_t progress_fct,
                                parsec_gpu_task_t* task,
-                               parsec_gpu_task_t** out_task )
+                               parsec_gpu_task_t** out_task,
+                               struct parsec_gpu_exec_stream_s** inout_sync_stream,
+                               int *inout_sync_event_idx)
 {
     int rc;
 #if defined(PARSEC_DEBUG_NOISIER)
     char task_str[MAX_TASK_STRLEN];
 #endif
-
-    /* We always handle the tasks in order. Thus if we got a new task, add it to the
-     * local list (possibly by reordering the list). Also, as we can return a single
-     * task first try to see if anything completed. */
-    if( NULL != task ) {
-        PARSEC_PUSH_TASK(stream->fifo_pending, (parsec_list_item_t*)task);
-        task = NULL;
+    struct parsec_gpu_exec_stream_s* sync_stream = NULL;
+    int sync_stream_event_idx = 0;
+    if (inout_sync_stream != NULL) {
+        sync_stream = *inout_sync_stream;
+        sync_stream_event_idx = *inout_sync_event_idx;
+        *inout_sync_stream = NULL;
+        *inout_sync_event_idx = 0;
     }
-    *out_task = NULL;
 
-    if( NULL != stream->tasks[stream->end] ) {
-        rc = gpu_device->event_query(gpu_device, stream, stream->end);
-        if( 1 == rc ) {
-            /* Save the task for the next step */
-            task = *out_task = stream->tasks[stream->end];
-            PARSEC_DEBUG_VERBOSE(19, parsec_gpu_output_stream,
-                                 "GPU[%d:%s]: Completed %s on stream %s{%p}",
-                                 gpu_device->super.device_index, gpu_device->super.name,
-                                 parsec_task_snprintf(task_str, MAX_TASK_STRLEN, task->ec),
-                                 stream->name, (void*)stream);
-            stream->tasks[stream->end]    = NULL;
-            stream->end = (stream->end + 1) % stream->max_events;
+    /* if we have a sync stream then skip all the task handling and go directly to the next step */
+    if (NULL == sync_stream && gpu_device->stream_wait_event != NULL) {
+        /* We always handle the tasks in order. Thus if we got a new task, add it to the
+        * local list (possibly by reordering the list). Also, as we can return a single
+        * task first try to see if anything completed. */
+        if( NULL != task ) {
+            PARSEC_PUSH_TASK(stream->fifo_pending, (parsec_list_item_t*)task);
+            task = NULL;
+        }
+        *out_task = NULL;
 
-#if defined(PARSEC_PROF_TRACE)
-            if( stream->prof_event_track_enable ) {
-                if( task->prof_key_end != -1 ) {
-                    PARSEC_PROFILING_TRACE(stream->profiling, task->prof_key_end, task->prof_event_id, task->prof_tp_id, NULL);
+        if( NULL != stream->tasks[stream->end] ) {
+            rc = gpu_device->event_query(gpu_device, stream, stream->end);
+            if( 1 == rc ) {
+                /* Save the task for the next step */
+                task = *out_task = stream->tasks[stream->end];
+                PARSEC_DEBUG_VERBOSE(19, parsec_gpu_output_stream,
+                                    "GPU[%d:%s]: Completed %s on stream %s{%p}",
+                                    gpu_device->super.device_index, gpu_device->super.name,
+                                    parsec_task_snprintf(task_str, MAX_TASK_STRLEN, task->ec),
+                                    stream->name, (void*)stream);
+                stream->tasks[stream->end]    = NULL;
+                stream->end = (stream->end + 1) % stream->max_events;
+
+    #if defined(PARSEC_PROF_TRACE)
+                if( stream->prof_event_track_enable ) {
+                    if( task->prof_key_end != -1 ) {
+                        PARSEC_PROFILING_TRACE(stream->profiling, task->prof_key_end, task->prof_event_id, task->prof_tp_id, NULL);
+                    }
                 }
+    #endif /* (PARSEC_PROF_TRACE) */
+                if( PARSEC_HOOK_RETURN_AGAIN == task->last_status ) {
+                    /* we can now reschedule the task on the same execution stream */
+                    PARSEC_DEBUG_VERBOSE(2, parsec_gpu_output_stream,
+                                        "GPU[%d:%s]: GPU task %p[%p] is ready to be rescheduled on the same GPU device and same stream",
+                                        gpu_device->super.device_index, gpu_device->super.name, (void*)task, (void*)task->ec);
+                    *out_task = NULL;
+                    goto schedule_task;
+                }
+                assert( PARSEC_HOOK_RETURN_ASYNC != task->last_status );
+                rc = PARSEC_HOOK_RETURN_DONE;
+                if (task->complete_stage)
+                    rc = task->complete_stage(gpu_device, out_task, stream);
+                /* the task can be withdrawn by the system */
+                return rc;
             }
-#endif /* (PARSEC_PROF_TRACE) */
-            if( PARSEC_HOOK_RETURN_AGAIN == task->last_status ) {
-                /* we can now reschedule the task on the same execution stream */
-                PARSEC_DEBUG_VERBOSE(2, parsec_gpu_output_stream,
-                                     "GPU[%d:%s]: GPU task %p[%p] is ready to be rescheduled on the same GPU device and same stream",
-                                     gpu_device->super.device_index, gpu_device->super.name, (void*)task, (void*)task->ec);
-                *out_task = NULL;
-                goto schedule_task;
+            if( 0 != rc ) {
+                return PARSEC_HOOK_RETURN_AGAIN;
             }
-            assert( PARSEC_HOOK_RETURN_ASYNC != task->last_status );
-            rc = PARSEC_HOOK_RETURN_DONE;
-            if (task->complete_stage)
-                rc = task->complete_stage(gpu_device, out_task, stream);
-            /* the task can be withdrawn by the system */
+        }
+
+    grab_a_task:
+        assert(NULL == task);
+        if( NULL == stream->tasks[stream->start] ) {  /* there is room on the stream */
+            task = (parsec_gpu_task_t*)parsec_list_pop_front(stream->fifo_pending);  /* get the best task */
+        }
+        if( NULL == task ) {  /* No tasks, we're done */
+            return PARSEC_HOOK_RETURN_DONE;
+        }
+        PARSEC_LIST_ITEM_SINGLETON((parsec_list_item_t*)task);
+
+        assert( NULL == stream->tasks[stream->start] );
+    } else {
+        /* synchronize the stream to be used on the prior stream and event */
+        rc = gpu_device->stream_wait_event(gpu_device, sync_stream, sync_stream_event_idx, gpu_device, stream);
+        if (0 != rc) {
+            /* TODO: anything else to do here? */
             return rc;
         }
-        if( 0 != rc ) {
-            return PARSEC_HOOK_RETURN_AGAIN;
-        }
     }
 
- grab_a_task:
-    assert(NULL == task);
-    if( NULL == stream->tasks[stream->start] ) {  /* there is room on the stream */
-        task = (parsec_gpu_task_t*)parsec_list_pop_front(stream->fifo_pending);  /* get the best task */
-    }
-    if( NULL == task ) {  /* No tasks, we're done */
-        return PARSEC_HOOK_RETURN_DONE;
-    }
-    PARSEC_LIST_ITEM_SINGLETON((parsec_list_item_t*)task);
-
-    assert( NULL == stream->tasks[stream->start] );
+    assert(task != NULL);
 
   schedule_task:
     rc = progress_fct( gpu_device, task, stream );
@@ -1926,8 +1948,15 @@ parsec_device_progress_stream( parsec_device_gpu_module_t* gpu_device,
     rc = gpu_device->event_record(gpu_device, stream, stream->start);
     gpu_device->super.nb_records++;
     assert(PARSEC_SUCCESS == rc);
-    stream->tasks[stream->start] = task;
-    stream->start = (stream->start + 1) % stream->max_events;
+    if (inout_sync_stream && *inout_sync_stream && gpu_device->stream_wait_event) {
+        /* no need to poll on the task */
+        *inout_sync_stream = stream;
+        *inout_sync_event_idx = stream->start;
+    } else {
+        /* save the task for later polling */
+        stream->tasks[stream->start] = task;
+        stream->start = (stream->start + 1) % stream->max_events;
+    }
     PARSEC_DEBUG_VERBOSE(20, parsec_gpu_output_stream,
                          "GPU[%d:%s]: Submitted %s(task %p) on stream %s{%p}",
                          gpu_device->super.device_index, gpu_device->super.name,
@@ -2458,6 +2487,8 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
     int rc, exec_stream = 0;
     parsec_gpu_task_t *progress_task, *out_task_submit = NULL, *out_task_pop = NULL;
     parsec_gpu_task_t *gpu_task = (parsec_gpu_task_t*)_gpu_task;
+    struct parsec_gpu_exec_stream_s* sync_stream = NULL;
+    int sync_stream_event_idx = 0;
 #if defined(PARSEC_DEBUG_NOISIER)
     char tmp[MAX_TASK_STRLEN];
 #endif
@@ -2522,7 +2553,8 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
     rc = parsec_device_progress_stream( gpu_device,
                                         gpu_device->exec_stream[0],
                                         parsec_device_kernel_push,
-                                        gpu_task, &progress_task );
+                                        gpu_task, &progress_task,
+                                        &sync_stream, &sync_stream_event_idx );
     if( rc < 0 ) {  /* In case of error progress_task is the task that raised it */
         if( PARSEC_HOOK_RETURN_ERROR == rc )
             goto disable_gpu;
@@ -2554,7 +2586,9 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
     rc = parsec_device_progress_stream( gpu_device,
                                         gpu_device->exec_stream[2+exec_stream],
                                         parsec_device_kernel_exec,
-                                        gpu_task, &progress_task );
+                                        gpu_task, &progress_task,
+                                        &sync_stream, &sync_stream_event_idx );
+
     if( rc < 0 ) {
         if( (PARSEC_HOOK_RETURN_DISABLE == rc) || (PARSEC_HOOK_RETURN_ERROR == rc) )
             goto disable_gpu;
@@ -2584,11 +2618,14 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
         PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,  "GPU[%d:%s]:\tRetrieve data (if any) for %s", gpu_device->super.device_index, gpu_device->super.name,
                             parsec_task_snprintf(tmp, MAX_TASK_STRLEN, gpu_task->ec));
     }
-    /* Task is ready to move the data back to main memory */
+    /* Task is ready to move the data back to main memory
+     * NOTE: we don't pass the sync-stream here because we may not know what outputs we need
+     *       and we need to call the complete_stage callback to release inputs */
     rc = parsec_device_progress_stream( gpu_device,
                                         gpu_device->exec_stream[1],
                                         parsec_device_kernel_pop,
-                                        gpu_task, &progress_task );
+                                        gpu_task, &progress_task,
+                                        NULL, NULL );
     if( rc < 0 ) {
         if( (PARSEC_HOOK_RETURN_ERROR == rc) || (PARSEC_HOOK_RETURN_DISABLE == rc) )
             goto disable_gpu;

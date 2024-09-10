@@ -169,7 +169,7 @@ static int parsec_cuda_all_devices_attached(parsec_device_module_t *device)
             cudastatus = cudaDeviceEnablePeerAccess( target_gpu->cuda_index, 0 );
             PARSEC_CUDA_CHECK_ERROR( "(parsec_device_cuda_component_query) cuCtxEnablePeerAccess", cudastatus,
                                      {continue;} );
-            source_gpu->super.peer_access_mask = (int16_t)(source_gpu->super.peer_access_mask | 
+            source_gpu->super.peer_access_mask = (int16_t)(source_gpu->super.peer_access_mask |
                 (int16_t)(1 << target_gpu->super.super.device_index));
         }
     }
@@ -350,6 +350,22 @@ static int parsec_cuda_event_record(struct parsec_device_gpu_module_s *gpu, stru
     return PARSEC_SUCCESS;
 }
 
+static int parsec_cuda_stream_wait_event(struct parsec_device_gpu_module_s *source_gpu,
+                                         struct parsec_gpu_exec_stream_s *source_gpu_stream,
+                                         int32_t source_event_idx,
+                                         struct parsec_device_gpu_module_s *target_gpu,
+                                         struct parsec_gpu_exec_stream_s *target_gpu_stream)
+{
+    parsec_cuda_exec_stream_t *cuda_source_stream = (parsec_cuda_exec_stream_t*)source_gpu_stream;
+    parsec_cuda_exec_stream_t *cuda_target_stream = (parsec_cuda_exec_stream_t*)target_gpu_stream;
+    cudaError_t cudaStatus;
+    (void)source_gpu;
+    (void)target_gpu;
+    cudaStatus = cudaStreamWaitEvent(cuda_target_stream->cudaStream, cuda_source_stream->events[source_event_idx], 0);
+    PARSEC_CUDA_CHECK_ERROR( "cudaStreamWaitEvent", cudaStatus, {return PARSEC_ERROR;} );
+    return PARSEC_SUCCESS;
+}
+
 static int parsec_cuda_event_query(struct parsec_device_gpu_module_s *gpu, struct parsec_gpu_exec_stream_s *gpu_stream, int32_t event_idx)
 {
     parsec_cuda_exec_stream_t *cuda_stream = (parsec_cuda_exec_stream_t*)gpu_stream;
@@ -413,7 +429,7 @@ parsec_cuda_module_init( int dev_id, parsec_device_module_t** module )
     double fp16, fp32, fp64, tf32;
     struct cudaDeviceProp prop;
 
-    show_caps_index = parsec_mca_param_find("device", NULL, "show_capabilities"); 
+    show_caps_index = parsec_mca_param_find("device", NULL, "show_capabilities");
     if(0 < show_caps_index) {
         parsec_mca_param_lookup_int(show_caps_index, &show_caps);
     }
@@ -501,7 +517,7 @@ parsec_cuda_module_init( int dev_id, parsec_device_module_t** module )
         /* Each 'exec' stream gets its own profiling stream, except IN and OUT stream that share it.
          * It's good to separate the exec streams to know what was submitted to what stream
          * We don't have this issue for the IN and OUT streams because types of event discriminate
-         * what happens where, and separating them consumes memory and increases the number of 
+         * what happens where, and separating them consumes memory and increases the number of
          * events that needs to be matched between streams because we cannot differentiate some
          * ends between IN or OUT, so they are all logged on the same stream. */
         gpu_device->trackable_events = PARSEC_PROFILE_GPU_TRACK_EXEC | PARSEC_PROFILE_GPU_TRACK_DATA_OUT
@@ -563,14 +579,15 @@ parsec_cuda_module_init( int dev_id, parsec_device_module_t** module )
     device->memory_register          = parsec_cuda_memory_register;
     device->memory_unregister        = parsec_cuda_memory_unregister;
     device->all_devices_attached     = parsec_cuda_all_devices_attached;
-    gpu_device->set_device       = parsec_cuda_set_device;
-    gpu_device->memcpy_async     = parsec_cuda_memcpy_async;
-    gpu_device->event_record     = parsec_cuda_event_record;
-    gpu_device->event_query      = parsec_cuda_event_query;
-    gpu_device->memory_info      = parsec_cuda_memory_info;
-    gpu_device->memory_allocate  = parsec_cuda_memory_allocate;
-    gpu_device->memory_free      = parsec_cuda_memory_free;
-    gpu_device->find_incarnation = parsec_cuda_find_incarnation;
+    gpu_device->set_device           = parsec_cuda_set_device;
+    gpu_device->memcpy_async         = parsec_cuda_memcpy_async;
+    gpu_device->event_record         = parsec_cuda_event_record;
+    gpu_device->stream_wait_event    = parsec_cuda_stream_wait_event;
+    gpu_device->event_query          = parsec_cuda_event_query;
+    gpu_device->memory_info          = parsec_cuda_memory_info;
+    gpu_device->memory_allocate      = parsec_cuda_memory_allocate;
+    gpu_device->memory_free          = parsec_cuda_memory_free;
+    gpu_device->find_incarnation     = parsec_cuda_find_incarnation;
 
     if( PARSEC_SUCCESS != parsec_device_memory_reserve(gpu_device,
                                                            parsec_cuda_memory_percentage,
@@ -621,7 +638,7 @@ parsec_cuda_module_init( int dev_id, parsec_device_module_t** module )
 #if defined(PARSEC_PROF_TRACE)
             if( NULL != exec_stream->profiling ) {
                 /* No function to clean the profiling stream. If one is introduced
-                 * some day, remember that exec streams 0 and 1 always share the same 
+                 * some day, remember that exec streams 0 and 1 always share the same
                  * ->profiling stream, and that all of them share the same
                  * ->profiling stream if parsec_device_cuda_one_profiling_stream_per_cuda_stream == 0 */
             }
