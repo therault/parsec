@@ -156,6 +156,20 @@ typedef int (*parsec_device_memcpy_async_fn_t)(struct parsec_device_gpu_module_s
 typedef int (*parsec_device_event_record_fn_t)(struct parsec_device_gpu_module_s *gpu, struct parsec_gpu_exec_stream_s *gpu_stream, int32_t event_idx);
 
 /**
+ * @brief Synchronize @p target_gpu_stream of GPU @p target_gpu with the record with index @p idx on @p source_gpu_stream of GPU @p source_gpu.
+ *
+ * @details typically maps to cudaStreamWaitEvent or equivalent. The GPU device must have allocated
+ *    @p gpu_stream->super.max_events previously (@p 0 <= event_idx < gpu_stream->super.max_events).
+ *
+ * @return PARSEC_SUCCESS or a PARSEC error
+ */
+typedef int (*parsec_device_stream_wait_event_fn_t)(struct parsec_device_gpu_module_s *source_gpu,
+                                                    struct parsec_gpu_exec_stream_s *source_gpu_stream,
+                                                    int32_t source_event_idx,
+                                                    struct parsec_device_gpu_module_s *target_gpu,
+                                                    struct parsec_gpu_exec_stream_s *target_gpu_stream);
+
+/**
  * @brief Record an event on the GPU @p gpu_stream of GPU @p gpu, with index @p idx.
  * 
  * @details typically maps to cudaRecordEvent or equivalent. The GPU device must have allocated
@@ -209,14 +223,15 @@ struct parsec_device_gpu_module_s {
     parsec_device_module_t     super;
 
     /* This set of base functions is used by the GPU devices to implement their Device Management Functions */
-    parsec_device_set_device_fn_t       set_device;
-    parsec_device_memcpy_async_fn_t     memcpy_async;
-    parsec_device_event_query_fn_t      event_query;
-    parsec_device_event_record_fn_t     event_record;
-    parsec_device_memory_info_fn_t      memory_info;
-    parsec_device_memory_allocate_fn_t  memory_allocate;
-    parsec_device_memory_free_fn_t      memory_free;
-    parsec_device_find_incarnation_fn_t find_incarnation;
+    parsec_device_set_device_fn_t        set_device;
+    parsec_device_memcpy_async_fn_t      memcpy_async;
+    parsec_device_event_query_fn_t       event_query;
+    parsec_device_event_record_fn_t      event_record;
+    parsec_device_stream_wait_event_fn_t stream_wait_event;
+    parsec_device_memory_info_fn_t       memory_info;
+    parsec_device_memory_allocate_fn_t   memory_allocate;
+    parsec_device_memory_free_fn_t       memory_free;
+    parsec_device_find_incarnation_fn_t  find_incarnation;
 
     uint8_t                    max_exec_streams;
     uint8_t                    num_exec_streams;
