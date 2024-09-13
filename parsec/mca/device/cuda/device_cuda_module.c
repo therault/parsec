@@ -361,7 +361,7 @@ static int parsec_cuda_stream_wait_event(struct parsec_device_gpu_module_s *sour
     cudaError_t cudaStatus;
     (void)source_gpu;
     (void)target_gpu;
-    cudaStatus = cudaStreamWaitEvent(cuda_target_stream->cudaStream, cuda_source_stream->events[source_event_idx], 0);
+    cudaStatus = cudaStreamWaitEvent(cuda_target_stream->cuda_stream, cuda_source_stream->events[source_event_idx], 0);
     PARSEC_CUDA_CHECK_ERROR( "cudaStreamWaitEvent", cudaStatus, {return PARSEC_ERROR;} );
     return PARSEC_SUCCESS;
 }
