@@ -29,6 +29,10 @@ struct parsec_data_s {
     parsec_object_t            super;
 
     parsec_atomic_lock_t       lock;
+#if defined(PARSEC_DEBUG_NOISIER)
+    const char                *last_lock_modifier_file;
+    int                        last_lock_modifier_line;
+#endif
 
     parsec_data_key_t          key;
     int8_t                     owner_device;
@@ -43,6 +47,34 @@ struct parsec_data_s {
                                                   */
 };
 PARSEC_DECLSPEC PARSEC_OBJ_CLASS_DECLARATION(parsec_data_t);
+
+#if defined(PARSEC_DEBUG_NOISIER)
+static inline void __parsec_data_lock_impl(parsec_data_t *dta, const char *filename, int line) {
+    parsec_atomic_lock(&dta->lock);
+    dta->last_lock_modifier_file = filename;
+    dta->last_lock_modifier_line = line;
+}
+#define PARSEC_DATA_LOCK(dta)    __parsec_data_lock_impl((dta), __FILE__, __LINE__)
+static inline void __parsec_data_unlock_impl(parsec_data_t *dta, const char *filename, int line) {
+    dta->last_lock_modifier_file = filename;
+    dta->last_lock_modifier_line = line;
+    parsec_atomic_unlock(&dta->lock);
+}
+#define PARSEC_DATA_UNLOCK(dta) __parsec_data_unlock_impl((dta), __FILE__, __LINE__ )
+static inline int __parsec_data_trylock_impl(parsec_data_t *dta, const char *filename, int line) {
+    int ret = parsec_atomic_trylock(&dta->lock);
+    if(ret) {
+        dta->last_lock_modifier_file = filename;
+        dta->last_lock_modifier_line = line;
+    }
+    return ret;
+}
+#define PARSEC_DATA_TRYLOCK(dta)  __parsec_data_trylock_impl((dta), __FILE__, __LINE__ )
+#else
+#define PARSEC_DATA_LOCK(dta)    parsec_atomic_lock(&( (dta)->lock) )
+#define PARSEC_DATA_TRYLOCK(dta) parsec_atomic_trylock(&( (dta)->lock) )
+#define PARSEC_DATA_UNLOCK(dta)  parsec_atomic_unlock(&( (dta)->lock) )
+#endif
 
 /**
  * This structure represent a device copy of a parsec_data_t.
