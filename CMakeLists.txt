@@ -310,6 +310,9 @@ if( PARSEC_PROF_TASKSTUBS )
         GIT_TAG             main
   )
   FetchContent_MakeAvailable(taskstubs)
+  install(TARGETS timer_plugin
+          EXPORT parsec-targets
+          DESTINATION ${PARSEC_INSTALL_LIBDIR})
 endif( PARSEC_PROF_TASKSTUBS )
 
 # Check for compiler tools
