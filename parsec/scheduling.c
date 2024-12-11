@@ -149,14 +149,18 @@ int __parsec_execute( parsec_execution_stream_t* es,
 
     parsec_hook_t *hook = tc->incarnations[task->selected_chore].hook;
     assert( NULL != hook );
-    PARSEC_PINS(EXEC_BEGIN, es, task);
+    if(!PARSEC_DEV_IS_GPU(tc->incarnations[task->selected_chore].type)) {
+        PARSEC_PINS(EXEC_BEGIN, es, task);
+    }
     rc = hook( es, task );
 #if defined(PARSEC_PROF_TRACE)
     task->prof_info.task_return_code = rc;
 #endif
     /* Record EXEC_END event to ensure the EXEC_BEGIN is completed
      * return code was stored in task_return_code */
-    PARSEC_PINS(EXEC_END, es, task);
+    if(!PARSEC_DEV_IS_GPU(tc->incarnations[task->selected_chore].type)) {
+        PARSEC_PINS(EXEC_END, es, task);
+    }
 
     assert( PARSEC_HOOK_RETURN_NEXT != rc );
     if( PARSEC_HOOK_RETURN_ASYNC != rc ) {

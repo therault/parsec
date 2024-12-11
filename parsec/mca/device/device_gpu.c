@@ -16,6 +16,7 @@
 #include "parsec/utils/argv.h"
 #include "parsec/parsec_internal.h"
 #include "parsec/scheduling.h"
+#include "parsec/mca/pins/pins.h"
 
 #include <limits.h>
 
@@ -2152,7 +2153,10 @@ parsec_device_kernel_exec( parsec_device_gpu_module_t      *gpu_device,
 #endif /* defined(PARSEC_DEBUG_PARANOID) */
 
     (void)this_task;
-    return progress_fct( gpu_device, gpu_task, gpu_stream );
+    PARSEC_PINS(GPU_TASK_SUBMIT_BEGIN, NULL, gpu_task, gpu_device, gpu_stream);
+    int rc = progress_fct( gpu_device, gpu_task, gpu_stream );
+    PARSEC_PINS(GPU_TASK_SUBMIT_END, NULL, gpu_task, gpu_device, gpu_stream);
+    return rc;
 }
 
 /**
@@ -2612,6 +2616,9 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
                                         gpu_device->exec_stream[2+exec_stream],
                                         parsec_device_kernel_exec,
                                         gpu_task, &progress_task );
+    if(NULL != progress_task) {
+        PARSEC_PINS(GPU_TASK_POLL_COMPLETED, es, progress_task, gpu_device, gpu_device->exec_stream[2+exec_stream]);
+    }
     if( rc < 0 ) {
         if( (PARSEC_HOOK_RETURN_DISABLE == rc) || (PARSEC_HOOK_RETURN_ERROR == rc) )
             goto disable_gpu;

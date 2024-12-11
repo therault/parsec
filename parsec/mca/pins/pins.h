@@ -10,6 +10,7 @@
 
 #include "parsec/runtime.h"
 #include "parsec/mca/mca.h"
+#include "parsec/mca/device/device_gpu.h"
 
 #define PARSEC_PINS_SEPARATOR ";"
 
@@ -40,12 +41,21 @@ typedef void (*parsec_pins_dependency_callback_t)(struct parsec_pins_next_callba
                                                   int                                 activation,
                                                   const struct parsec_flow_s*         src_flow,
                                                   const struct parsec_flow_s*         dst_flow);
+struct parsec_gpu_task_s;
+struct parsec_device_gpu_module_s;
+struct parsec_gpu_exec_stream_s;
+typedef void (*parsec_pins_gpu_task_callback_t)(struct parsec_pins_next_callback_s*      cb_data,
+                                                struct parsec_execution_stream_s*        es,
+                                                const struct parsec_gpu_task_s*                 task,
+                                                const struct parsec_device_gpu_module_s*        module,
+                                                const struct parsec_gpu_exec_stream_s*          stream);
 typedef union {
     parsec_pins_empty_callback_t      parsec_pins_empty_callback;
     parsec_pins_task_callback_t       parsec_pins_task_callback;
     parsec_pins_dependency_callback_t parsec_pins_dependency_callback;
     parsec_pins_dc_to_dag_callback_t  parsec_pins_dc_to_dag_callback;
     parsec_pins_dag_to_dc_callback_t  parsec_pins_dag_to_dc_callback;
+    parsec_pins_gpu_task_callback_t   parsec_pins_gpu_task_callback;
 } parsec_pins_callback;
 
 typedef struct parsec_pins_next_callback_s {
@@ -96,6 +106,12 @@ typedef enum PARSEC_PINS_FLAG {
 #define DATA_COLLECTION_INPUT_PINS_FCT_TYPE parsec_pins_dc_to_dag_callback
         DATA_COLLECTION_OUTPUT, // called when a data flows from the DAG into the data collection. Parameters: task, data, flow
 #define DATA_COLLECTION_OUTPUT_PINS_FCT_TYPE parsec_pins_dag_to_dc_callback
+        GPU_TASK_SUBMIT_BEGIN,       // Called before a GPU manager submits a kernel to the GPU stream. Parameters: the gpu_task that is submitted, the device module pointer, and the GPU stream
+#define GPU_TASK_SUBMIT_BEGIN_PINS_FCT_TYPE parsec_pins_gpu_task_callback
+        GPU_TASK_SUBMIT_END,        // Called after a GPU manager submitted a kernel to the GPU stream. Parameters: the gpu_task that was submitted, the device module pointer, and the GPU stream
+#define GPU_TASK_SUBMIT_END_PINS_FCT_TYPE parsec_pins_gpu_task_callback
+        GPU_TASK_POLL_COMPLETED,    // Called after a GPU manager polled a task completion event from the a GPU stream. Parameters: the gpu_task that completed, the device module pointer and the GPU stream
+#define GPU_TASK_POLL_COMPLETED_PINS_FCT_TYPE parsec_pins_gpu_task_callback
     /* PARSEC_PINS_FLAG_COUNT is not an event at all */
     PARSEC_PINS_FLAG_COUNT
 } PARSEC_PINS_FLAG;

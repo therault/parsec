@@ -25,9 +25,8 @@
 #include "parsec/utils/debug.h"
 #include "parsec/utils/output.h"
 #include "parsec/class/info.h"
-#include "parsec/mca/pins/pins.h"
-
 #include "parsec/mca/device/device.h"
+#include "parsec/mca/pins/pins.h"
 
 #if defined(PARSEC_PROF_TASKSTUBS)
 #include "tasktimer.h"
