@@ -61,7 +61,8 @@ static parsec_task_t* array_of_async_tasks[100];
  * reached. If more iterations have been already done it will return asap.
  */
 
-int cuda_task_async(parsec_device_gpu_module_t *gpu_device,
+int cuda_task_async(parsec_execution_stream_t *es,
+                    parsec_device_gpu_module_t *gpu_device,
                     parsec_gpu_task_t *gpu_task,
                     parsec_gpu_exec_stream_t *gpu_stream)
 {

@@ -120,17 +120,25 @@ static void task_stubs_prepare_input_begin(parsec_pins_next_callback_t* data,
     pins_task_stubs_parent_set_t *parent_set = (pins_task_stubs_parent_set_t*)parsec_hash_table_remove(&pins_task_stubs_parents_table, myguid);
     tasktimer_guid_t *parents;
     uint64_t nb_parents;
+    char *parents_str;
     if(NULL == parent_set) {
         parents = NULL;
         nb_parents = 0;
+        parents_str = strdup("");
     } else {
         parents = parent_set->parent_uid;
         nb_parents = parent_set->nb_parents;
+        parents_str = calloc(64, nb_parents);
+        for(int i = 0; i < nb_parents; i++) {
+            sprintf(parents_str + strlen(parents_str), "%p ", (uintptr_t)parents[i]);
+        }
         free(parent_set);
     }
     TASKTIMER_CREATE(task->task_class->incarnations[0].hook, task->task_class->name, myguid, parents, nb_parents, timer);
+    fprintf(stderr, "Created timer %p for CPU task %p with %ld parents (%s)\n", timer, task, nb_parents, parents_str);
     if(NULL != parents) {
         free(parents);
+        free(parents_str);
     }
     task->taskstub_timer = timer;
     tasktimer_argument_value_t args[1];
@@ -153,16 +161,11 @@ static void task_stubs_exec_begin(parsec_pins_next_callback_t* data,
         return;
     }
 
-    if(NULL != task->selected_device && PARSEC_DEV_IS_GPU(task->selected_device->type)) {
-        resource.type = TASKTIMER_DEVICE_GPU;
-        resource.device_id = task->selected_device->device_index; // TODO: need to convert the PaRSEC device index to something consistent with the tool
-        // TODO: instance_id: stream ID (only for GPUs)
-        resource.instance_id = 0; // Undefined at this time
-    } else {
-        resource.type = TASKTIMER_DEVICE_CPU;
-        resource.device_id = es->th_id;
-    }
+    resource.type = TASKTIMER_DEVICE_CPU;
+    resource.device_id = es->th_id;
+
     TASKTIMER_START(task->taskstub_timer, &resource);
+    fprintf(stderr, "Started timer %p for CPU task %p\n", task->taskstub_timer, task);
     (void)data;
 }
 
@@ -176,7 +179,42 @@ static void task_stubs_exec_end(parsec_pins_next_callback_t* data,
     }
 
     TASKTIMER_STOP(task->taskstub_timer);
+    fprintf(stderr, "Ended timer %p for CPU task %p\n", task->taskstub_timer, task);
     (void)es;(void)data;
+}
+
+static void task_stubs_gpu_submit_begin(parsec_pins_next_callback_t* data,
+                                        parsec_execution_stream_t* es,
+                                        const parsec_gpu_task_t* gpu_task,
+                                        const parsec_device_gpu_module_t* module,
+                                        const parsec_gpu_exec_stream_t* gpu_stream)
+{
+    tasktimer_execution_space_t resource;
+    parsec_task_t *task = gpu_task->ec;
+    int i;
+    assert(task->task_class->task_class_id < task->taskpool->nb_task_classes /* no startup tasks */);
+    (void)es;
+    resource.type = TASKTIMER_DEVICE_GPU;
+    resource.device_id = module->super.device_index; // TODO: need to convert the PaRSEC device index to something consistent with the tool
+    for(i = 0; module->exec_stream[i] != gpu_stream; i++) /* nothing */;
+    resource.instance_id = i;
+    TASKTIMER_START(task->taskstub_timer, &resource);
+    fprintf(stderr, "Started timer %p for GPU task %p, task %p\n", task->taskstub_timer, gpu_task, task);
+    (void)data;
+}
+
+static void task_stubs_gpu_task_poll_completed(parsec_pins_next_callback_t* data,
+                                               parsec_execution_stream_t* es,
+                                               const parsec_gpu_task_t* gpu_task,
+                                               const parsec_device_gpu_module_t* module,
+                                               const parsec_gpu_exec_stream_t* gpu_stream)
+{
+    parsec_task_t *task = gpu_task->ec;
+    assert(task->task_class->task_class_id < task->taskpool->nb_task_classes /* No startup tasks */);
+
+    fprintf(stderr, "Ending timer %p for GPU task %p, task %p\n", task->taskstub_timer, gpu_task, task);
+    TASKTIMER_STOP(task->taskstub_timer);
+    (void)es;(void)data; (void)module; (void)gpu_stream;
 }
 
 static void task_stubs_complete_exec_end(parsec_pins_next_callback_t* data,
@@ -188,6 +226,7 @@ static void task_stubs_complete_exec_end(parsec_pins_next_callback_t* data,
         return;
     }
 
+    fprintf(stderr, "Destroying timer %p for task %p\n", task->taskstub_timer, task);
     TASKTIMER_DESTROY(task->taskstub_timer);
     (void)es;(void)data;
 }
@@ -210,12 +249,23 @@ static void pins_fini_task_stubs(parsec_context_t *master_context)
 static void pins_thread_init_task_stubs(struct parsec_execution_stream_s * es)
 {
     parsec_pins_next_callback_t* event_cb;
+
+/*    int loop = 1;
+    fprintf(stderr, "gdb -p %d\n", getpid());
+    while(loop) {
+        sleep(1);
+    }
+*/
     event_cb = (parsec_pins_next_callback_t*)calloc(1, sizeof(parsec_pins_next_callback_t));
     PARSEC_PINS_REGISTER(es, PREPARE_INPUT_BEGIN, task_stubs_prepare_input_begin, event_cb);
     event_cb = (parsec_pins_next_callback_t*)calloc(1, sizeof(parsec_pins_next_callback_t));
     PARSEC_PINS_REGISTER(es, EXEC_BEGIN, task_stubs_exec_begin, event_cb);
     event_cb = (parsec_pins_next_callback_t*)calloc(1, sizeof(parsec_pins_next_callback_t));
     PARSEC_PINS_REGISTER(es, EXEC_END, task_stubs_exec_end, event_cb);
+    event_cb = (parsec_pins_next_callback_t*)calloc(1, sizeof(parsec_pins_next_callback_t));
+    PARSEC_PINS_REGISTER(es, GPU_TASK_SUBMIT_BEGIN, task_stubs_gpu_submit_begin, event_cb);
+    event_cb = (parsec_pins_next_callback_t*)calloc(1, sizeof(parsec_pins_next_callback_t));
+    PARSEC_PINS_REGISTER(es, GPU_TASK_POLL_COMPLETED, task_stubs_gpu_task_poll_completed, event_cb);
     event_cb = (parsec_pins_next_callback_t*)malloc(sizeof(parsec_pins_next_callback_t));
     PARSEC_PINS_REGISTER(es, COMPLETE_EXEC_END, task_stubs_complete_exec_end, event_cb);
     event_cb = (parsec_pins_next_callback_t*)malloc(sizeof(parsec_pins_next_callback_t));
@@ -230,6 +280,10 @@ static void pins_thread_fini_task_stubs(struct parsec_execution_stream_s * es)
     PARSEC_PINS_UNREGISTER(es, PREPARE_INPUT_BEGIN, task_stubs_prepare_input_begin, &event_cb);
     free(event_cb);
     PARSEC_PINS_UNREGISTER(es, EXEC_BEGIN, task_stubs_exec_begin, &event_cb);
+    free(event_cb);
+    PARSEC_PINS_UNREGISTER(es, GPU_TASK_SUBMIT_BEGIN, task_stubs_gpu_submit_begin, &event_cb);
+    free(event_cb);
+    PARSEC_PINS_UNREGISTER(es, GPU_TASK_POLL_COMPLETED, task_stubs_gpu_task_poll_completed, &event_cb);
     free(event_cb);
     PARSEC_PINS_UNREGISTER(es, EXEC_END, task_stubs_exec_end, &event_cb);
     free(event_cb);

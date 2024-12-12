@@ -1812,7 +1812,8 @@ parsec_device_callback_complete_push(parsec_device_gpu_module_t   *gpu_device,
  * enum.
  */
 static inline int
-parsec_device_progress_stream( parsec_device_gpu_module_t* gpu_device,
+parsec_device_progress_stream( parsec_execution_stream_t *es,
+                               parsec_device_gpu_module_t* gpu_device,
                                parsec_gpu_exec_stream_t* stream,
                                parsec_advance_task_function_t progress_fct,
                                parsec_gpu_task_t* task,
@@ -1884,7 +1885,7 @@ parsec_device_progress_stream( parsec_device_gpu_module_t* gpu_device,
     assert( NULL == stream->tasks[stream->start] );
 
   schedule_task:
-    rc = progress_fct( gpu_device, task, stream );
+    rc = progress_fct( es, gpu_device, task, stream );
     if( 0 > rc ) {
         if( PARSEC_HOOK_RETURN_AGAIN != rc ) {
             if( PARSEC_HOOK_RETURN_NEXT == rc ) {
@@ -1948,7 +1949,8 @@ parsec_device_progress_stream( parsec_device_gpu_module_t* gpu_device,
  *     -2: No more room on the GPU to move this data.
  */
 static int
-parsec_device_kernel_push( parsec_device_gpu_module_t      *gpu_device,
+parsec_device_kernel_push( parsec_execution_stream_t       *es,
+                           parsec_device_gpu_module_t      *gpu_device,
                            parsec_gpu_task_t               *gpu_task,
                            parsec_gpu_exec_stream_t        *gpu_stream)
 {
@@ -1958,6 +1960,8 @@ parsec_device_kernel_push( parsec_device_gpu_module_t      *gpu_device,
 #if defined(PARSEC_DEBUG_NOISIER)
     char tmp[MAX_TASK_STRLEN];
 #endif
+
+    (void)es;
 
     /* if no changes were made to the available memory dont waste time */
     if( gpu_task->last_data_check_epoch == gpu_device->data_avail_epoch )
@@ -2045,7 +2049,8 @@ parsec_device_kernel_push( parsec_device_gpu_module_t      *gpu_device,
  * @returns An error if anything unexpected came out of the task submission body, otherwise
  */
 static int
-parsec_device_kernel_exec( parsec_device_gpu_module_t      *gpu_device,
+parsec_device_kernel_exec( parsec_execution_stream_t       *es,
+                           parsec_device_gpu_module_t      *gpu_device,
                            parsec_gpu_task_t               *gpu_task,
                            parsec_gpu_exec_stream_t        *gpu_stream)
 {
@@ -2087,9 +2092,9 @@ parsec_device_kernel_exec( parsec_device_gpu_module_t      *gpu_device,
 #endif /* defined(PARSEC_DEBUG_PARANOID) */
 
     (void)this_task;
-    PARSEC_PINS(GPU_TASK_SUBMIT_BEGIN, NULL, gpu_task, gpu_device, gpu_stream);
-    int rc = progress_fct( gpu_device, gpu_task, gpu_stream );
-    PARSEC_PINS(GPU_TASK_SUBMIT_END, NULL, gpu_task, gpu_device, gpu_stream);
+    PARSEC_PINS(GPU_TASK_SUBMIT_BEGIN, es, gpu_task, gpu_device, gpu_stream);
+    int rc = progress_fct( es, gpu_device, gpu_task, gpu_stream );
+    PARSEC_PINS(GPU_TASK_SUBMIT_END, es, gpu_task, gpu_device, gpu_stream);
     return rc;
 }
 
@@ -2101,7 +2106,8 @@ parsec_device_kernel_exec( parsec_device_gpu_module_t      *gpu_device,
  *           positive: the number of data to be moved.
  */
 static int
-parsec_device_kernel_pop( parsec_device_gpu_module_t   *gpu_device,
+parsec_device_kernel_pop( parsec_execution_stream_t    *es,
+                          parsec_device_gpu_module_t   *gpu_device,
                           parsec_gpu_task_t            *gpu_task,
                           parsec_gpu_exec_stream_t     *gpu_stream)
 {
@@ -2114,6 +2120,8 @@ parsec_device_kernel_pop( parsec_device_gpu_module_t   *gpu_device,
 #if defined(PARSEC_DEBUG_NOISIER)
     char tmp[MAX_TASK_STRLEN];
 #endif
+
+    (void)es;
 
     if (gpu_task->task_type == PARSEC_GPU_TASK_TYPE_D2HTRANSFER) {
         for( i = 0; i < this_task->locals[0].value; i++ ) {
@@ -2514,7 +2522,7 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
                              gpu_device->super.device_index, gpu_device->super.name,
                              parsec_device_describe_gpu_task(tmp, MAX_TASK_STRLEN, gpu_task));
     }
-    rc = parsec_device_progress_stream( gpu_device,
+    rc = parsec_device_progress_stream( es, gpu_device,
                                         gpu_device->exec_stream[0],
                                         parsec_device_kernel_push,
                                         gpu_task, &progress_task );
@@ -2546,7 +2554,7 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
         PARSEC_DEBUG_VERBOSE(10, parsec_gpu_output_stream,  "GPU[%d:%s]:\tExecute %s", gpu_device->super.device_index, gpu_device->super.name,
                              parsec_task_snprintf(tmp, MAX_TASK_STRLEN, gpu_task->ec));
     }
-    rc = parsec_device_progress_stream( gpu_device,
+    rc = parsec_device_progress_stream( es, gpu_device,
                                         gpu_device->exec_stream[2+exec_stream],
                                         parsec_device_kernel_exec,
                                         gpu_task, &progress_task );
@@ -2583,7 +2591,7 @@ parsec_device_kernel_scheduler( parsec_device_module_t *module,
                             parsec_task_snprintf(tmp, MAX_TASK_STRLEN, gpu_task->ec));
     }
     /* Task is ready to move the data back to main memory */
-    rc = parsec_device_progress_stream( gpu_device,
+    rc = parsec_device_progress_stream( es, gpu_device,
                                         gpu_device->exec_stream[1],
                                         parsec_device_kernel_pop,
                                         gpu_task, &progress_task );

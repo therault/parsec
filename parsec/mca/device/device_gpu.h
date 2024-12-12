@@ -46,7 +46,8 @@ typedef int (*parsec_complete_stage_function_t)(parsec_device_gpu_module_t  *gpu
 /**
  *
  */
-typedef int (*parsec_advance_task_function_t)(parsec_device_gpu_module_t  *gpu_device,
+typedef int (*parsec_advance_task_function_t)(parsec_execution_stream_t   *es,
+                                              parsec_device_gpu_module_t  *gpu_device,
                                               parsec_gpu_task_t           *gpu_task,
                                               parsec_gpu_exec_stream_t    *gpu_stream);
 

@@ -236,6 +236,7 @@ PARSEC_PINS_FLAG parsec_pins_name_to_begin_flag(const char *name);
 /* We need one such converter per type used, to allow for type-checking */
 PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_empty_callback);
 PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_task_callback);
+PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_gpu_task_callback);
 PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_dependency_callback);
 PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_dc_to_dag_callback);
 PARSEC_PINS_MAKE_FCT_TO_CALLBACK(parsec_pins_dag_to_dc_callback);
