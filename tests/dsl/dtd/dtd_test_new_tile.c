@@ -65,7 +65,8 @@ int cpu_set_to_i( parsec_execution_stream_t *es,
 }
 
 #if defined(PARSEC_HAVE_DEV_CUDA_SUPPORT) && defined(PARSEC_HAVE_CU_COMPILER)
-int cuda_set_to_i(parsec_device_gpu_module_t *gpu_device,
+int cuda_set_to_i(parsec_execution_stream_t *es,
+                  parsec_device_gpu_module_t *gpu_device,
                   parsec_gpu_task_t *gpu_task,
                   parsec_gpu_exec_stream_t *gpu_stream)
 {
@@ -127,7 +128,8 @@ int cpu_multiply_by_2( parsec_execution_stream_t *es,
 }
 
 #if defined(PARSEC_HAVE_DEV_CUDA_SUPPORT) && defined(PARSEC_HAVE_CU_COMPILER)
-int cuda_multiply_by_2(parsec_device_gpu_module_t *gpu_device,
+int cuda_multiply_by_2(parsec_execution_stream_t *es,
+                       parsec_device_gpu_module_t *gpu_device,
                        parsec_gpu_task_t *gpu_task,
                        parsec_gpu_exec_stream_t *gpu_stream)
 {
@@ -192,7 +194,8 @@ int cpu_accumulate( parsec_execution_stream_t *es,
 }
 
 #if defined(PARSEC_HAVE_DEV_CUDA_SUPPORT) && defined(PARSEC_HAVE_CU_COMPILER)
-int cuda_accumulate(parsec_device_gpu_module_t *gpu_device,
+int cuda_accumulate(parsec_execution_stream_t *es,
+                    parsec_device_gpu_module_t *gpu_device,
                     parsec_gpu_task_t *gpu_task,
                     parsec_gpu_exec_stream_t *gpu_stream)
 {

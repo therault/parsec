@@ -168,7 +168,8 @@ int initialize_matrix(parsec_context_t *parsec_context, int rank, parsec_matrix_
     return 0;
 }
 
-int gemm_kernel_cuda(parsec_device_gpu_module_t *gpu_device,
+int gemm_kernel_cuda(parsec_execution_stream_t *es,
+                     parsec_device_gpu_module_t *gpu_device,
                      parsec_gpu_task_t *gpu_task,
                      parsec_gpu_exec_stream_t *gpu_stream)
 {

@@ -38,7 +38,8 @@ static unsigned int unique_id(int myrank, int i, int mt, int j, int nb)
     return myrank + (j + i * nb) * mt + 1;
 }
 
-int print_cuda_info_task(parsec_device_gpu_module_t *gpu_device,
+int print_cuda_info_task(parsec_execution_stream_t *es,
+                         parsec_device_gpu_module_t *gpu_device,
                          parsec_gpu_task_t *gpu_task,
                          parsec_gpu_exec_stream_t *gpu_stream)
 {
@@ -113,7 +114,8 @@ int test_cuda_print_info(int world, int rank, parsec_context_t *parsec_context)
     return error_count;
 }
 
-int cuda_memset_task_fn(parsec_device_gpu_module_t *gpu_device,
+int cuda_memset_task_fn(parsec_execution_stream_t *es,
+                        parsec_device_gpu_module_t *gpu_device,
                         parsec_gpu_task_t *gpu_task,
                         parsec_gpu_exec_stream_t *gpu_stream)
 {
@@ -448,7 +450,8 @@ int write_task_fn(parsec_execution_stream_t *es,
     return PARSEC_HOOK_RETURN_DONE;
 }
 
-int cuda_read_task_fn(parsec_device_gpu_module_t *gpu_device,
+int cuda_read_task_fn(parsec_execution_stream_t *es,
+                      parsec_device_gpu_module_t *gpu_device,
                       parsec_gpu_task_t *gpu_task,
                       parsec_gpu_exec_stream_t *gpu_stream)
 {
@@ -652,7 +655,8 @@ int *get_cuda_device_index()
     return dev_index;
 }
 
-int cuda_cpy_task_fn(parsec_device_gpu_module_t *gpu_device,
+int cuda_cpy_task_fn(parsec_execution_stream_t *es,
+                     parsec_device_gpu_module_t *gpu_device,
                      parsec_gpu_task_t *gpu_task,
                      parsec_gpu_exec_stream_t *gpu_stream)
 {

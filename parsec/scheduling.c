@@ -149,7 +149,9 @@ int __parsec_execute( parsec_execution_stream_t* es,
 
     parsec_hook_t *hook = tc->incarnations[task->selected_chore].hook;
     assert( NULL != hook );
-    if(!PARSEC_DEV_IS_GPU(tc->incarnations[task->selected_chore].type)) {
+    int wasnt_gpu = 0;
+    if(!PARSEC_DEV_IS_GPU(task->selected_device->type)) {
+        wasnt_gpu = 1;
         PARSEC_PINS(EXEC_BEGIN, es, task);
     }
     rc = hook( es, task );
@@ -158,7 +160,7 @@ int __parsec_execute( parsec_execution_stream_t* es,
 #endif
     /* Record EXEC_END event to ensure the EXEC_BEGIN is completed
      * return code was stored in task_return_code */
-    if(!PARSEC_DEV_IS_GPU(tc->incarnations[task->selected_chore].type)) {
+    if(wasnt_gpu) {
         PARSEC_PINS(EXEC_END, es, task);
     }
 
