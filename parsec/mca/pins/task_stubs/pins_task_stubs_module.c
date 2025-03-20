@@ -135,7 +135,6 @@ static void task_stubs_prepare_input_begin(parsec_pins_next_callback_t* data,
         free(parent_set);
     }
     TASKTIMER_CREATE(task->task_class->incarnations[0].hook, task->task_class->name, myguid, parents, nb_parents, timer);
-    fprintf(stderr, "Created timer %p for CPU task %p with %ld parents (%s)\n", timer, task, nb_parents, parents_str);
     if(NULL != parents) {
         free(parents);
         free(parents_str);
@@ -165,7 +164,6 @@ static void task_stubs_exec_begin(parsec_pins_next_callback_t* data,
     resource.device_id = es->th_id;
 
     TASKTIMER_START(task->taskstub_timer, &resource);
-    fprintf(stderr, "Started timer %p for CPU task %p\n", task->taskstub_timer, task);
     (void)data;
 }
 
@@ -179,7 +177,6 @@ static void task_stubs_exec_end(parsec_pins_next_callback_t* data,
     }
 
     TASKTIMER_STOP(task->taskstub_timer);
-    fprintf(stderr, "Ended timer %p for CPU task %p\n", task->taskstub_timer, task);
     (void)es;(void)data;
 }
 
@@ -199,7 +196,6 @@ static void task_stubs_gpu_submit_begin(parsec_pins_next_callback_t* data,
     for(i = 0; module->exec_stream[i] != gpu_stream; i++) /* nothing */;
     resource.instance_id = i;
     TASKTIMER_START(task->taskstub_timer, &resource);
-    fprintf(stderr, "Started timer %p for GPU task %p, task %p\n", task->taskstub_timer, gpu_task, task);
     (void)data;
 }
 
@@ -212,7 +208,6 @@ static void task_stubs_gpu_task_poll_completed(parsec_pins_next_callback_t* data
     parsec_task_t *task = gpu_task->ec;
     assert(task->task_class->task_class_id < task->taskpool->nb_task_classes /* No startup tasks */);
 
-    fprintf(stderr, "Ending timer %p for GPU task %p, task %p\n", task->taskstub_timer, gpu_task, task);
     TASKTIMER_STOP(task->taskstub_timer);
     (void)es;(void)data; (void)module; (void)gpu_stream;
 }
@@ -226,7 +221,6 @@ static void task_stubs_complete_exec_end(parsec_pins_next_callback_t* data,
         return;
     }
 
-    fprintf(stderr, "Destroying timer %p for task %p\n", task->taskstub_timer, task);
     TASKTIMER_DESTROY(task->taskstub_timer);
     (void)es;(void)data;
 }
@@ -250,12 +244,6 @@ static void pins_thread_init_task_stubs(struct parsec_execution_stream_s * es)
 {
     parsec_pins_next_callback_t* event_cb;
 
-/*    int loop = 1;
-    fprintf(stderr, "gdb -p %d\n", getpid());
-    while(loop) {
-        sleep(1);
-    }
-*/
     event_cb = (parsec_pins_next_callback_t*)calloc(1, sizeof(parsec_pins_next_callback_t));
     PARSEC_PINS_REGISTER(es, PREPARE_INPUT_BEGIN, task_stubs_prepare_input_begin, event_cb);
     event_cb = (parsec_pins_next_callback_t*)calloc(1, sizeof(parsec_pins_next_callback_t));
