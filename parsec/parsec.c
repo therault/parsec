@@ -1670,9 +1670,10 @@ parsec_release_local_OUT_dependencies(parsec_execution_stream_t* es,
     PARSEC_DEBUG_VERBOSE(10, parsec_debug_output, "Activate dependencies for %s flags = 0x%04x", tmp1, tc->flags);
     deps = tc->find_deps(origin->taskpool, es, task);
 
+    completed = tc->update_deps(origin->taskpool, task, deps, origin, origin_flow, dest_flow);
+
     PARSEC_PINS(TASK_DEPENDENCY, es, origin, task, completed, origin_flow, dest_flow);
 
-    completed = tc->update_deps(origin->taskpool, task, deps, origin, origin_flow, dest_flow);
 
     if( completed ) {
 
