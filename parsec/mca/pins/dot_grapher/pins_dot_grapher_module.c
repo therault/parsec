@@ -90,10 +90,9 @@ static char *parsec_dot_grapher_taskid(const parsec_task_t *task, char *tmp, int
     for( i = 1; i < index; i++ ) {
         if(!isalnum(tmp[i])) tmp[i] = '_';
     }
-    for( i = 0; i < tc->nb_parameters; i++ ) {
-        index += snprintf( tmp + index, length - index, "_%d",
-                           task->locals[tc->params[i]->context_index].value );
-    }
+    parsec_key_t key = task->task_class->make_key( task->taskpool, task->locals );
+    uint64_t hash = task->task_class->key_functions->key_hash(key, NULL);
+    snprintf( tmp + index, length - index, "_%"PRIu64, hash );
 
     return tmp;
 }
