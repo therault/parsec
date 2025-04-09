@@ -156,12 +156,25 @@ static void parsec_dot_grapher_dep(struct parsec_pins_next_callback_s* cb_data,
         index += snprintf( tmp + index, 128 - index, " -> " );
         parsec_dot_grapher_taskid( to, tmp + index, 128 - index - 4 );
         pthread_mutex_lock(&grapher_file_lock);
-        fprintf(grapher_file,
-                "%s [label=\"%s=>%s\",color=\"#%s\",style=\"%s\"]\n",
-                tmp, origin_flow->name, dest_flow->name,
-                dependency_activates_task ? "00FF00" : "FF0000",
-                ((dest_flow->flow_flags == PARSEC_FLOW_ACCESS_NONE) ? "dotted":
-                 (dest_flow->flow_flags == PARSEC_FLOW_ACCESS_RW) ? "solid" : "dashed"));
+        const char *style = "solid";
+        if (dest_flow != NULL) {
+            if (dest_flow->flow_flags == PARSEC_FLOW_ACCESS_NONE) {
+                style = "dotted";
+            } else if (dest_flow->flow_flags == PARSEC_FLOW_ACCESS_RW) {
+                style = "dashed";
+            }
+        }
+        if (dest_flow != NULL && origin_flow != NULL) {
+            fprintf(grapher_file,
+                    "%s [label=\"%s=>%s\",color=\"#%s\",style=\"%s\"]\n",
+                    tmp, (origin_flow) ? origin_flow->name : "<null>",
+                    (dest_flow) ? dest_flow->name : "<null>",
+                    dependency_activates_task ? "00FF00" : "FF0000", style);
+        } else {
+            fprintf(grapher_file,
+                    "%s [color=\"#%s\",style=\"%s\"]\n",
+                    tmp, dependency_activates_task ? "00FF00" : "FF0000", style);
+        }
         fflush(grapher_file);
         pthread_mutex_unlock(&grapher_file_lock);
     }
