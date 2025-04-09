@@ -42,8 +42,8 @@ parsec_pins_module_t parsec_pins_task_stubs_module = {
 static uint64_t task_stubs_make_guid(const struct parsec_task_s *task)
 {
     uint64_t tuid = task->task_class->key_functions->key_hash(task->task_class->make_key(task->taskpool, task->locals), NULL);
-    uint64_t tpuid = ((uint64_t)task->taskpool->taskpool_id)<<62;
-    uint64_t tcuid = ((uint64_t)task->task_class->task_class_id) << 56;
+    uint64_t tpuid = ((uint64_t)task->taskpool->taskpool_id)<<60;
+    uint64_t tcuid = ((uint64_t)task->task_class->task_class_id) << 52;
 #if defined(PARSEC_DEBUG_NOISIER)
     char tmp[128];
     task->task_class->task_snprintf(tmp, 128, task);
@@ -51,7 +51,7 @@ static uint64_t task_stubs_make_guid(const struct parsec_task_s *task)
                          "task_stubs create guid for %s -> tuid %"PRIx64" tpuid %"PRIx64" tcuid %"PRIx64" -> %"PRIx64" \n",
                          tmp, tuid, tpuid, tcuid, tuid|tpuid|tcuid);
 #endif
-    return (tuid & (~0ULL)>>8) | tpuid | tcuid;
+    return (tuid & (~0ULL)>>12) | tpuid | tcuid;
  }
 
 typedef struct {
